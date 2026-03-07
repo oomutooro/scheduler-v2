@@ -103,13 +103,7 @@
             <tr>
                 <td>
                     <strong>
-                        {% if row.flight.operation_type == 'turnaround' %}
-                        {{ row.flight.arrival_flight_number|default:"-" }} / {{ row.flight.departure_flight_number|default:"-" }}
-                        {% elif row.flight.operation_type == 'arrival' %}
-                        {{ row.flight.arrival_flight_number|default:"-" }}
-                        {% else %}
-                        {{ row.flight.departure_flight_number|default:"-" }}
-                        {% endif %}
+                        {{ row.flight.display_flight_numbers }}
                     </strong>
                 </td>
                 <td>

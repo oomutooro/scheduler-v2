@@ -191,6 +191,25 @@ class FlightRequest(models.Model):
         return bool(self.days_of_operation & DAY_MASK[day_names[dow]])
 
     @property
+    def display_flight_numbers(self):
+        """Format flight numbers, abbreviating turnaround if they share a prefix."""
+        arr = self.arrival_flight_number
+        dep = self.departure_flight_number
+        
+        if self.operation_type == 'arrival':
+            return arr or "-"
+        elif self.operation_type == 'departure':
+            return dep or "-"
+        else:
+            if not arr or not dep:
+                return f"{arr or '-'} / {dep or '-'}"
+            import os
+            common = os.path.commonprefix([arr, dep])
+            if common:
+                return f"{arr}/{dep[len(common):]}"
+            return f"{arr} / {dep}"
+
+    @property
     def checkin_duration_hours(self):
         """Check-in window duration in hours."""
         return 3 if self.aircraft_type.is_wide_body else 2

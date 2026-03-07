@@ -96,13 +96,7 @@
                     </td>
                     <td>
                         <strong>
-                            {% if row.flight.arrival_flight_number %}
-                            {{ row.flight.arrival_flight_number }}
-                            {% endif %}
-                            {% if row.flight.departure_flight_number %}
-                            {% if row.flight.arrival_flight_number %} / {% endif %}
-                            {{ row.flight.departure_flight_number }}
-                            {% endif %}
+                            {{ row.flight.display_flight_numbers }}
                         </strong>
                         {% if row.warnings %}
                         <br>

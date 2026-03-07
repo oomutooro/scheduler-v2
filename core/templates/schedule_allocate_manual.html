@@ -33,8 +33,9 @@
                     <select id="stand_id" name="stand_id" class="form-control" required>
                         <option value="">— No Stand (Arrival only) —</option>
                         {% for stand in available_stands %}
-                        <option value="{{ stand.id }}">
-                            Stand {{ stand.stand_number }} (Code {{ stand.size_code }}{% if stand.has_boarding_bridge %}, Bridge{% endif %})
+                        <option value="{{ stand.id }}" {% if not stand.is_available %}disabled{% endif %}>
+                            {{ stand.name }}
+                            {% if not stand.is_available %} — {{ stand.conflict_msg }}{% endif %}
                         </option>
                         {% endfor %}
                     </select>
@@ -54,8 +55,9 @@
                     <select id="gate_id" name="gate_id" class="form-control" required>
                         <option value="">— No Gate (Optional) —</option>
                         {% for gate in available_gates %}
-                        <option value="{{ gate.id }}">
-                            Gate {{ gate.gate_number }}{% if gate.has_boarding_bridge %} (Bridge){% endif %}
+                        <option value="{{ gate.id }}" {% if not gate.is_available %}disabled{% endif %}>
+                            {{ gate.name }}
+                            {% if not gate.is_available %} — {{ gate.conflict_msg }}{% endif %}
                         </option>
                         {% endfor %}
                     </select>
@@ -73,9 +75,10 @@
                     <label class="form-label" for="counter_range">Select Counter Range</label>
                     <select id="counter_range" name="counter_range" class="form-control">
                         <option value="">— No Check-in (Arrival only) —</option>
-                        {% for start, end in available_counters %}
-                        <option value="{{ start }}-{{ end }}">
-                            Counters {{ start }}–{{ end }} ({{ end|add:1|add:-start }} counters)
+                        {% for counter in available_counters %}
+                        <option value="{{ counter.id }}" {% if not counter.is_available %}disabled{% endif %}>
+                            {{ counter.name }}
+                            {% if not counter.is_available %} — {{ counter.conflict_msg }}{% endif %}
                         </option>
                         {% endfor %}
                     </select>

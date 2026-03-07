@@ -142,7 +142,7 @@ def flights_list(request):
             ('friday', 'Friday'),
             ('saturday', 'Saturday'),
         ],
-        'day_headers': ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'],
+        'day_headers': ['S', 'M', 'T', 'W', 'T', 'F', 'S'],
         'summer_count': summer_count,
         'winter_count': winter_count,
         'total_count': summer_count + winter_count,
@@ -538,8 +538,8 @@ def schedule_allocate_manual(request, flight_id):
                 if arr and dep and gb.preferred_gate.connected_stand_id:
                     hard_blocked_stands.append((gb.preferred_gate.connected_stand_id, arr, dep))
 
-    # Get available stands
-    existing_stands = get_allocated_stands_on_date(selected_date)
+    # Get available stands (as dict options)
+    existing_stand_allocs = StandAllocation.objects.filter(date=selected_date).select_related('flight_request', 'flight_request__airline')
     all_stands = ParkingStand.objects.filter(
         is_active=True, parent_stand__isnull=True
     ).filter(Q(size_code__in=['D', 'E', 'F']) | Q(size_code__lte=flight.aircraft_type.size_code))
@@ -547,57 +547,99 @@ def schedule_allocate_manual(request, flight_id):
     available_stands = []
     for stand in all_stands:
         if stand.can_accommodate(flight.aircraft_type):
-            conflict = False
-            for (sid, sstart, send) in existing_stands + hard_blocked_stands:
+            is_available = True
+            conflict_msg = ""
+            
+            # Check hard blocked first
+            for sid, sstart, send in hard_blocked_stands:
                 if sid == stand.id and times_overlap(arrival, departure, sstart, send):
-                    conflict = True
+                    is_available = False
+                    conflict_msg = "Hard-blocked"
                     break
-            if not conflict:
-                available_stands.append(stand)
+            
+            # Check existing allocations
+            if is_available:
+                for alloc in existing_stand_allocs:
+                    if alloc.stand_id == stand.id and times_overlap(arrival, departure, alloc.start_time, alloc.end_time):
+                        is_available = False
+                        f_disp = alloc.flight_request.display_flight_numbers
+                        conflict_msg = f"In use by {f_disp} ({alloc.start_time.strftime('%H:%M')} – {alloc.end_time.strftime('%H:%M')})"
+                        break
+                        
+            available_stands.append({
+                'id': stand.id,
+                'name': f"Stand {stand.stand_number} (Code {stand.size_code}{', Bridge' if stand.has_boarding_bridge else ''})",
+                'is_available': is_available,
+                'conflict_msg': conflict_msg
+            })
     
-    # Get available gates (only for non-arrival flights)
+    # Get available gates
     available_gates = []
     if flight.operation_type != 'arrival':
         departure_time = flight.departure_time
         gate_close = time_subtract_minutes(departure_time, 15)
         gate_open = time_subtract_minutes(departure_time, 45)
         
-        existing_gates = get_allocated_gates_on_date(selected_date)
+        existing_gate_allocs = GateAllocation.objects.filter(date=selected_date).select_related('flight_request', 'flight_request__airline')
         all_gates = Gate.objects.filter(is_active=True)
         
         for gate in all_gates:
-            conflict = False
-            for (gid, gstart, gend) in existing_gates + hard_blocked_gates:
+            is_available = True
+            conflict_msg = ""
+            
+            for gid, gstart, gend in hard_blocked_gates:
                 if gid == gate.id and times_overlap(gate_open, gate_close, gstart, gend):
-                    conflict = True
+                    is_available = False
+                    conflict_msg = "Hard-blocked"
                     break
-            if not conflict:
-                available_gates.append(gate)
+            
+            if is_available:
+                for alloc in existing_gate_allocs:
+                    if alloc.gate_id == gate.id and times_overlap(gate_open, gate_close, alloc.start_time, alloc.end_time):
+                        is_available = False
+                        f_disp = alloc.flight_request.display_flight_numbers
+                        conflict_msg = f"In use by {f_disp} ({alloc.start_time.strftime('%H:%M')} – {alloc.end_time.strftime('%H:%M')})"
+                        break
+                        
+            available_gates.append({
+                'id': gate.id,
+                'name': f"Gate {gate.gate_number}{' (Bridge)' if gate.has_boarding_bridge else ''}",
+                'is_available': is_available,
+                'conflict_msg': conflict_msg
+            })
     
-    # Get available counters (only for non-arrival flights)
+    # Get available counters
     available_counters = []
     if flight.operation_type != 'arrival':
         departure_time = flight.departure_time
         checkin_close = time_subtract_minutes(departure_time, 60)
         checkin_open = time_subtract_minutes(checkin_close, flight.checkin_duration_hours * 60)
         
-        existing_allocs = list(CheckInAllocation.objects.filter(date=selected_date))
+        existing_checkin_allocs = list(CheckInAllocation.objects.filter(date=selected_date).select_related('flight_request', 'flight_request__airline'))
         num_needed = flight.min_counters
         
-        # Find contiguous free counter ranges
-        for start in range(1, 24 - num_needed):
+        for start in range(1, 24 - num_needed + 1):
             end = start + num_needed - 1
-            block_free = True
-            for alloc in existing_allocs:
+            is_available = True
+            conflict_msg = ""
+            
+            for alloc in existing_checkin_allocs:
                 for c in range(start, end + 1):
                     if alloc.counter_from <= c <= alloc.counter_to:
                         if times_overlap(checkin_open, checkin_close, alloc.start_time, alloc.end_time):
-                            block_free = False
+                            is_available = False
+                            f_disp = alloc.flight_request.display_flight_numbers
+                            conflict_msg = f"In use by {f_disp} ({alloc.start_time.strftime('%H:%M')} – {alloc.end_time.strftime('%H:%M')})"
                             break
-                if not block_free:
+                if not is_available:
                     break
-            if block_free:
-                available_counters.append((start, end))
+                    
+            available_counters.append({
+                'id': f"{start}-{end}",
+                'name': f"Counters {start}–{end} ({end - start + 1} counters)",
+                'is_available': is_available,
+                'conflict_msg': conflict_msg
+            })
     
     context = {
         'flight': flight,
