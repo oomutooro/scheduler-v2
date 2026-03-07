@@ -383,15 +383,53 @@ def schedule_view(request):
         for ca in CheckInAllocation.objects.filter(date=selected_date)
     }
 
+    # Pre-fetch handlers for the daily flights
+    from core.models import GroundHandler, AirlineGatePreference, AirlineStandPreference
+    handlers_map = {}
+    for handler in GroundHandler.objects.prefetch_related('airlines').all():
+        for airline in handler.airlines.all():
+            handlers_map[airline.id] = handler
+
+    stand_prefs = {}
+    for p in AirlineStandPreference.objects.select_related('destination').all():
+        if p.airline_id not in stand_prefs: stand_prefs[p.airline_id] = []
+        stand_prefs[p.airline_id].append(p)
+        
+    gate_prefs = {}
+    for p in AirlineGatePreference.objects.select_related('preferred_gate', 'destination').all():
+        if p.airline_id not in gate_prefs: gate_prefs[p.airline_id] = []
+        gate_prefs[p.airline_id].append(p)
+
     # Build display rows
     flight_rows = []
     for f in sorted(daily_flights, key=lambda x: x.arrival_time or x.departure_time or datetime.min.time()):
+        handler = handlers_map.get(f.airline_id)
+        
+        warnings = []
+        stand = stand_allocs.get(f.id)
+        gate = gate_allocs.get(f.id)
+        
+        # Stand warning
+        for pref in stand_prefs.get(f.airline_id, []):
+            if not pref.destination_id or pref.destination_id == f.destination_id:
+                if pref.requires_bridge and stand and not stand.stand.has_boarding_bridge:
+                    warnings.append(f"Requires bridge stand (currently on Stand {stand.stand.stand_number})")
+                break
+                
+        # Gate warning
+        for pref in gate_prefs.get(f.airline_id, []):
+            if not pref.destination_id or pref.destination_id == f.destination_id:
+                if gate and gate.gate.id != pref.preferred_gate_id:
+                    warnings.append(f"Preferred gate is {pref.preferred_gate.gate_number} (currently on Gate {gate.gate.gate_number})")
+                break
+                
         flight_rows.append({
             'flight': f,
             'stand': stand_allocs.get(f.id),
             'gate': gate_allocs.get(f.id),
             'checkin': checkin_allocs.get(f.id),
             'allocated': f.id in stand_allocs or f.id in gate_allocs or f.id in checkin_allocs,
+            'handler': handler,
         })
 
     allocated_count = sum(1 for r in flight_rows if r['allocated'])
@@ -479,6 +517,27 @@ def schedule_allocate_manual(request, flight_id):
     arrival = flight.arrival_time or flight.departure_time
     departure = flight.departure_time or flight.arrival_time
     
+    # Find hard blocked stands and gates
+    from core.models import AirlineGatePreference
+    hard_blocked_gates = []
+    hard_blocked_stands = []
+    
+    gate_blocks = AirlineGatePreference.objects.filter(is_hard_block=True)
+    for gb in gate_blocks:
+        blocking_flights = FlightRequest.objects.filter(airline=gb.airline)
+        if gb.destination:
+            blocking_flights = blocking_flights.filter(destination=gb.destination)
+        for bf in blocking_flights:
+            if bf.id != flight.id and bf.operates_on_date(selected_date):
+                arr = bf.arrival_time or bf.departure_time
+                dep = bf.departure_time or bf.arrival_time
+                if bf.operation_type != 'arrival' and bf.departure_time:
+                    g_close = time_subtract_minutes(bf.departure_time, 15)
+                    g_open = time_subtract_minutes(bf.departure_time, 45)
+                    hard_blocked_gates.append((gb.preferred_gate_id, g_open, g_close))
+                if arr and dep and gb.preferred_gate.connected_stand_id:
+                    hard_blocked_stands.append((gb.preferred_gate.connected_stand_id, arr, dep))
+
     # Get available stands
     existing_stands = get_allocated_stands_on_date(selected_date)
     all_stands = ParkingStand.objects.filter(
@@ -489,7 +548,7 @@ def schedule_allocate_manual(request, flight_id):
     for stand in all_stands:
         if stand.can_accommodate(flight.aircraft_type):
             conflict = False
-            for (sid, sstart, send) in existing_stands:
+            for (sid, sstart, send) in existing_stands + hard_blocked_stands:
                 if sid == stand.id and times_overlap(arrival, departure, sstart, send):
                     conflict = True
                     break
@@ -508,7 +567,7 @@ def schedule_allocate_manual(request, flight_id):
         
         for gate in all_gates:
             conflict = False
-            for (gid, gstart, gend) in existing_gates:
+            for (gid, gstart, gend) in existing_gates + hard_blocked_gates:
                 if gid == gate.id and times_overlap(gate_open, gate_close, gstart, gend):
                     conflict = True
                     break
@@ -653,6 +712,24 @@ def season_allocations_view(request):
     
     qs = qs.order_by('airline__name', 'arrival_time', 'departure_time')
     
+    # Pre-fetch handlers for the filtered airlines
+    from core.models import GroundHandler, AirlineGatePreference, AirlineStandPreference
+    handlers_map = {}
+    for handler in GroundHandler.objects.prefetch_related('airlines').all():
+        for airline in handler.airlines.all():
+            handlers_map[airline.id] = handler
+
+    # Pre-fetch preferences for warnings
+    stand_prefs = {}
+    for p in AirlineStandPreference.objects.select_related('destination').all():
+        if p.airline_id not in stand_prefs: stand_prefs[p.airline_id] = []
+        stand_prefs[p.airline_id].append(p)
+        
+    gate_prefs = {}
+    for p in AirlineGatePreference.objects.select_related('preferred_gate', 'destination').all():
+        if p.airline_id not in gate_prefs: gate_prefs[p.airline_id] = []
+        gate_prefs[p.airline_id].append(p)
+    
     # Build flight rows with allocations
     flight_rows = []
     for flight in qs:
@@ -693,6 +770,27 @@ def season_allocations_view(request):
         if checkin_allocs:
             checkin = f"C{checkin_allocs['counter_from']}–{checkin_allocs['counter_to']}"
         
+        handler = handlers_map.get(flight.airline_id)
+        
+        # Check warnings
+        warnings = []
+        
+        # Stand warning: requires bridge but got non-bridge
+        flight_stand_prefs = stand_prefs.get(flight.airline_id, [])
+        for pref in flight_stand_prefs:
+            if not pref.destination_id or pref.destination_id == flight.destination_id:
+                if pref.requires_bridge and stand and not stand.has_boarding_bridge:
+                    warnings.append(f"Requires bridge stand (currently on Stand {stand.stand_number})")
+                break
+                
+        # Gate warning
+        flight_gate_prefs = gate_prefs.get(flight.airline_id, [])
+        for pref in flight_gate_prefs:
+            if not pref.destination_id or pref.destination_id == flight.destination_id:
+                if gate and gate.id != pref.preferred_gate_id:
+                    warnings.append(f"Preferred gate is {pref.preferred_gate.gate_number} (currently on Gate {gate.gate_number})")
+                break
+        
         flight_rows.append({
             'flight': flight,
             'stand': stand,
@@ -700,6 +798,8 @@ def season_allocations_view(request):
             'checkin': checkin,
             'has_conflict': has_conflict,
             'allocated': stand or gate or checkin,
+            'handler': handler,
+            'warnings': warnings,
         })
     
     # Get counts by season

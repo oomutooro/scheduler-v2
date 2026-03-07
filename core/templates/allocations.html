@@ -74,6 +74,7 @@
                     </th>
                     <th>Flight</th>
                     <th>Airline</th>
+                    <th>Handler</th>
                     <th>Aircraft</th>
                     <th>Route</th>
                     <th>Arrival</th>
@@ -103,10 +104,25 @@
                             {{ row.flight.departure_flight_number }}
                             {% endif %}
                         </strong>
+                        {% if row.warnings %}
+                        <br>
+                        {% for w in row.warnings %}
+                            <span title="{{ w }}" style="color: #eab308; cursor: help; font-size: 14px;">⚠️</span>
+                        {% endfor %}
+                        {% endif %}
                     </td>
                     <td>
                         <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
                         <br><small>{{ row.flight.airline.name|truncatewords:2 }}</small>
+                    </td>
+                    <td>
+                        {% if row.handler %}
+                            <span class="code-badge" style="background-color: #f3f4f6; color: #4b5563;" title="{{ row.handler.name }}">
+                                {{ row.handler.short_code }}
+                            </span>
+                        {% else %}
+                            <span class="unallocated">—</span>
+                        {% endif %}
                     </td>
                     <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
                     <td class="route-cell">

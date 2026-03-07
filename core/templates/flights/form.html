@@ -24,7 +24,7 @@ System{% endblock %}
                 <select id="airline_id" name="airline_id" class="form-control" required>
                     <option value="">— Select Airline —</option>
                     {% for airline in airlines %}
-                    <option value="{{ airline.id }}" {% if form_action == 'edit' and flight.airline_id == airline.id %}selected{% endif %}>
+                    <option value="{{ airline.id }}" data-iata="{{ airline.iata_code }}" {% if form_action == 'edit' and flight.airline_id == airline.id %}selected{% endif %}>
                         {{ airline.name }} ({{ airline.iata_code }}/{{ airline.icao_code }})
                     </option>
                     {% endfor %}
@@ -75,18 +75,22 @@ System{% endblock %}
 
             <!-- Arrival Flight Number -->
             <div class="form-group arrival-field">
-                <label class="form-label" for="arrival_flight_number">Arrival Flight Number</label>
-                <input type="text" id="arrival_flight_number" name="arrival_flight_number" class="form-control"
-                    placeholder="e.g., EK729"
-                    value="{% if form_action == 'edit' %}{{ flight.arrival_flight_number }}{% endif %}">
+                <label class="form-label" for="arrival_flight_number_suffix">Arrival Flight Number</label>
+                <div class="flight-number-input">
+                    <span class="iata-prefix" id="arrival_iata_prefix">--</span>
+                    <input type="text" id="arrival_flight_number_suffix" class="form-control" placeholder="e.g. 729" autocomplete="off">
+                    <input type="hidden" id="arrival_flight_number" name="arrival_flight_number" value="{% if form_action == 'edit' %}{{ flight.arrival_flight_number }}{% endif %}">
+                </div>
             </div>
 
             <!-- Departure Flight Number -->
             <div class="form-group departure-field">
-                <label class="form-label" for="departure_flight_number">Departure Flight Number</label>
-                <input type="text" id="departure_flight_number" name="departure_flight_number" class="form-control"
-                    placeholder="e.g., EK730"
-                    value="{% if form_action == 'edit' %}{{ flight.departure_flight_number }}{% endif %}">
+                <label class="form-label" for="departure_flight_number_suffix">Departure Flight Number</label>
+                <div class="flight-number-input">
+                    <span class="iata-prefix" id="departure_iata_prefix">--</span>
+                    <input type="text" id="departure_flight_number_suffix" class="form-control" placeholder="e.g. 730" autocomplete="off">
+                    <input type="hidden" id="departure_flight_number" name="departure_flight_number" value="{% if form_action == 'edit' %}{{ flight.departure_flight_number }}{% endif %}">
+                </div>
             </div>
 
             <!-- Arrival Time -->
@@ -152,11 +156,15 @@ System{% endblock %}
         <div class="form-section">
             <h3 class="form-section-title">Days of Operation *</h3>
             <div class="days-grid">
+                <label class="day-checkbox">
+                    <input type="checkbox" id="select_all_days" class="day-input" {% if form_action != 'edit' %}checked{% endif %}>
+                    <span class="day-label" style="font-weight: bold; background-color: #e0e7ff; color: #3b82f6;">Select All</span>
+                </label>
                 {% for day in days %}
                 {% with day_lower=day|lower %}
                 <label class="day-checkbox">
                     <input type="checkbox" name="day_{{ day_lower }}" {% if form_action != 'edit' %}checked{% endif %}
-                        class="day-input" data-day="{{ day_lower }}">
+                        class="day-input day-single" data-day="{{ day_lower }}">
                     <span class="day-label">{{ day }}</span>
                 </label>
                 {% endwith %}
@@ -202,11 +210,105 @@ System{% endblock %}
         {% if form_action == 'edit' %}
         var dayMask = {{ day_mask }};
         var dayMap = { sunday: 1, monday: 2, tuesday: 4, wednesday: 8, thursday: 16, friday: 32, saturday: 64 };
-        document.querySelectorAll('.day-input').forEach(function (cb) {
+        document.querySelectorAll('.day-single').forEach(function (cb) {
             var day = cb.dataset.day;
             cb.checked = !!(dayMask & dayMap[day]);
         });
         {% endif %}
-});
+
+        // Select All Days logic
+        var selectAllCheckbox = document.getElementById('select_all_days');
+        var dayCheckboxes = document.querySelectorAll('.day-single');
+        
+        if (selectAllCheckbox) {
+            // Initial state check
+            var checkAllState = function() {
+                var allChecked = Array.from(dayCheckboxes).every(function(c) { return c.checked; });
+                selectAllCheckbox.checked = allChecked;
+            };
+            checkAllState();
+
+            // When Select All is clicked
+            selectAllCheckbox.addEventListener('change', function() {
+                var isChecked = this.checked;
+                dayCheckboxes.forEach(function(cb) {
+                    cb.checked = isChecked;
+                });
+            });
+
+            // When individual days are clicked
+            dayCheckboxes.forEach(function(cb) {
+                cb.addEventListener('change', checkAllState);
+            });
+        }
+
+        // Auto-populate Flight Number with IATA code split UX
+        var airlineSelect = document.getElementById('airline_id');
+        var arrPrefix = document.getElementById('arrival_iata_prefix');
+        var arrSuffix = document.getElementById('arrival_flight_number_suffix');
+        var arrHidden = document.getElementById('arrival_flight_number');
+        
+        var depPrefix = document.getElementById('departure_iata_prefix');
+        var depSuffix = document.getElementById('departure_flight_number_suffix');
+        var depHidden = document.getElementById('departure_flight_number');
+
+        function updateHiddenFlightNumbers() {
+            var iata = arrPrefix.textContent !== '--' ? arrPrefix.textContent : '';
+            arrHidden.value = arrSuffix.value.trim() ? iata + arrSuffix.value.trim() : '';
+            depHidden.value = depSuffix.value.trim() ? iata + depSuffix.value.trim() : '';
+        }
+
+        if (airlineSelect) {
+            // Initial setup for edit mode
+            var initialIata = '';
+            if (airlineSelect.selectedIndex > 0) {
+                initialIata = airlineSelect.options[airlineSelect.selectedIndex].getAttribute('data-iata') || '--';
+            }
+            
+            arrPrefix.textContent = initialIata || '--';
+            depPrefix.textContent = initialIata || '--';
+
+            // Split existing hidden values into suffix if they start with the prefix
+            if (initialIata && initialIata !== '--') {
+                if (arrHidden.value.startsWith(initialIata)) {
+                    arrSuffix.value = arrHidden.value.substring(initialIata.length);
+                } else {
+                    arrSuffix.value = arrHidden.value;
+                }
+                
+                if (depHidden.value.startsWith(initialIata)) {
+                    depSuffix.value = depHidden.value.substring(initialIata.length);
+                } else {
+                    depSuffix.value = depHidden.value;
+                }
+            } else {
+                arrSuffix.value = arrHidden.value;
+                depSuffix.value = depHidden.value;
+            }
+
+            // Handle airline change
+            airlineSelect.addEventListener('change', function() {
+                var selectedOption = this.options[this.selectedIndex];
+                var iataCode = selectedOption && selectedOption.value ? selectedOption.getAttribute('data-iata') : '--';
+                
+                arrPrefix.textContent = iataCode;
+                depPrefix.textContent = iataCode;
+                
+                // Keep the suffix the same, but update hidden
+                updateHiddenFlightNumbers();
+                
+                // Focus the first visible suffix input
+                if (document.getElementById('operation_type').value !== 'departure') {
+                    arrSuffix.focus();
+                } else {
+                    depSuffix.focus();
+                }
+            });
+
+            // Handle suffix input changes
+            arrSuffix.addEventListener('input', updateHiddenFlightNumbers);
+            depSuffix.addEventListener('input', updateHiddenFlightNumbers);
+        }
+    });
 </script>
 {% endblock %}

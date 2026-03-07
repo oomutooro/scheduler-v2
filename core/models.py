@@ -62,6 +62,45 @@ class AircraftType(models.Model):
     def __str__(self):
         return f"{self.code} — {self.name} (Code {self.size_code})"
 
+# ─── Ground Handlers & Preferences ────────────────────────────────────────────
+
+class GroundHandler(models.Model):
+    name = models.CharField(max_length=100)
+    short_code = models.CharField(max_length=10, unique=True)
+    airlines = models.ManyToManyField(Airline, related_name='handlers')
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return f"{self.name} ({self.short_code})"
+
+
+class AirlineGatePreference(models.Model):
+    airline = models.ForeignKey(Airline, on_delete=models.CASCADE, related_name='gate_preferences')
+    preferred_gate = models.ForeignKey('Gate', on_delete=models.CASCADE)
+    destination = models.ForeignKey(Airport, on_delete=models.CASCADE, null=True, blank=True)
+    is_hard_block = models.BooleanField(default=False)
+    notes = models.CharField(max_length=200, blank=True)
+
+    def __str__(self):
+        dest = f" to {self.destination.iata_code}" if self.destination else " (All)"
+        return f"{self.airline.iata_code} -> Gate {self.preferred_gate.gate_number}{dest}"
+
+
+class AirlineStandPreference(models.Model):
+    airline = models.ForeignKey(Airline, on_delete=models.CASCADE, related_name='stand_preferences')
+    requires_bridge = models.BooleanField(default=False)
+    preferred_stand = models.ForeignKey('ParkingStand', on_delete=models.SET_NULL, null=True, blank=True)
+    destination = models.ForeignKey(Airport, on_delete=models.CASCADE, null=True, blank=True)
+    notes = models.CharField(max_length=200, blank=True)
+
+    def __str__(self):
+        dest = f" to {self.destination.iata_code}" if self.destination else " (All)"
+        bridge = " [Bridge Req]" if self.requires_bridge else ""
+        stand = f" Stand {self.preferred_stand.stand_number}" if self.preferred_stand else ""
+        return f"{self.airline.iata_code}{dest}{bridge}{stand}"
+
 
 # ─── Flight Requests ──────────────────────────────────────────────────────────
 

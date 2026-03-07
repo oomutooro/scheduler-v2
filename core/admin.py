@@ -3,6 +3,7 @@ from .models import (
 	Airline, Airport, AircraftType, FlightRequest,
 	ParkingStand, Gate, CheckInCounter,
 	StandAllocation, GateAllocation, CheckInAllocation,
+	GroundHandler, AirlineGatePreference, AirlineStandPreference,
 )
 
 
@@ -65,4 +66,23 @@ class GateAllocationAdmin(admin.ModelAdmin):
 class CheckInAllocationAdmin(admin.ModelAdmin):
 	list_display = ('flight_request', 'counter_from', 'counter_to', 'date', 'start_time', 'end_time')
 	list_filter = ('date',)
+
+
+@admin.register(GroundHandler)
+class GroundHandlerAdmin(admin.ModelAdmin):
+	list_display = ('name', 'short_code')
+	search_fields = ('name', 'short_code')
+	filter_horizontal = ('airlines',)
+
+
+@admin.register(AirlineGatePreference)
+class AirlineGatePreferenceAdmin(admin.ModelAdmin):
+	list_display = ('airline', 'preferred_gate', 'destination', 'is_hard_block')
+	list_filter = ('is_hard_block', 'airline', 'preferred_gate')
+
+
+@admin.register(AirlineStandPreference)
+class AirlineStandPreferenceAdmin(admin.ModelAdmin):
+	list_display = ('airline', 'preferred_stand', 'destination', 'requires_bridge')
+	list_filter = ('requires_bridge', 'airline', 'preferred_stand')
 

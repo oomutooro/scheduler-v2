@@ -58,6 +58,7 @@
         <thead>
             <tr>
                 <th>Airline</th>
+                <th>Handler</th>
                 <th>Flight No.</th>
                 <th>Aircraft</th>
                 <th>Route</th>
@@ -80,6 +81,15 @@
                     <br><small>{{ row.flight.airline.name }}</small>
                 </td>
                 <td>
+                    {% if row.handler %}
+                        <span class="code-badge" style="background-color: #f3f4f6; color: #4b5563;" title="{{ row.handler.name }}">
+                            {{ row.handler.short_code }}
+                        </span>
+                    {% else %}
+                        <span class="unallocated">—</span>
+                    {% endif %}
+                </td>
+                <td>
                     <strong>
                         {% if row.flight.operation_type == 'turnaround' %}
                         {{ row.flight.arrival_flight_number|default:"-" }} / {{ row.flight.departure_flight_number|default:"-" }}
@@ -89,6 +99,12 @@
                         {{ row.flight.departure_flight_number|default:"-" }}
                         {% endif %}
                     </strong>
+                    {% if row.warnings %}
+                    <br>
+                    {% for w in row.warnings %}
+                        <span title="{{ w }}" style="color: #eab308; cursor: help; font-size: 14px;">⚠️</span>
+                    {% endfor %}
+                    {% endif %}
                 </td>
                 <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
                 <td>{{ row.flight.origin.iata_code|default:"—" }} → {{ row.flight.destination.iata_code|default:"—" }}
