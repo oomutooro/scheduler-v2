@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block title %}{% if form_action == 'new' %}Add{% else %}Edit{% endif %} Aircraft Type — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="back-link">
+    <a href="{% url 'aircraft_types_list' %}">← Back to Aircraft Types</a>
+</div>
+
+<h1 class="page-title">{% if form_action == 'new' %}Add{% else %}Edit{% endif %} Aircraft Type</h1>
+
+<div class="form-card">
+    <form method="post" action="{% if form_action == 'new' %}{% url 'aircraft_type_create' %}{% else %}{% url 'aircraft_type_update' aircraft_type.pk %}{% endif %}">
+        {% csrf_token %}
+
+        <div class="form-grid-2">
+            <div class="form-group">
+                <label class="form-label" for="code">Aircraft Code *</label>
+                <input type="text" id="code" name="code" class="form-control" maxlength="10"
+                    value="{% if form_action == 'edit' %}{{ aircraft_type.code }}{% endif %}" required>
+                <small class="form-hint">e.g., B777, A333, B738</small>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="name">Aircraft Name *</label>
+                <input type="text" id="name" name="name" class="form-control"
+                    placeholder="e.g., Boeing 777-300ER"
+                    value="{% if form_action == 'edit' %}{{ aircraft_type.name }}{% endif %}" required>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" for="manufacturer">Manufacturer</label>
+            <input type="text" id="manufacturer" name="manufacturer" class="form-control"
+                placeholder="e.g., Boeing, Airbus"
+                value="{% if form_action == 'edit' %}{{ aircraft_type.manufacturer }}{% endif %}">
+        </div>
+
+        <div class="form-grid-2">
+            <div class="form-group">
+                <label class="form-label" for="category">Category *</label>
+                <select id="category" name="category" class="form-control" required>
+                    <option value="">— Select Category —</option>
+                    {% for cat in categories %}
+                    <option value="{{ cat }}" {% if form_action == 'edit' and aircraft_type.category == cat %}selected{% endif %}>{{ cat|capfirst }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="size_code">Size Code *</label>
+                <select id="size_code" name="size_code" class="form-control" required>
+                    <option value="">— Select Size —</option>
+                    {% for size in size_codes %}
+                    <option value="{{ size }}" {% if form_action == 'edit' and aircraft_type.size_code == size %}selected{% endif %}>Code {{ size }}</option>
+                    {% endfor %}
+                </select>
+                <small class="form-hint">A (&lt;15m), B (15-24m), C (24-36m), D (36-52m), E (52-65m), F (65-80m)</small>
+            </div>
+        </div>
+
+        <div class="form-grid-2">
+            <div class="form-group">
+                <label class="form-checkbox">
+                    <input type="checkbox" name="is_wide_body" {% if form_action == 'edit' and aircraft_type.is_wide_body %}checked{% endif %}>
+                    <span>Wide Body Aircraft</span>
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="pax_capacity">Pax Capacity</label>
+                <input type="number" id="pax_capacity" name="pax_capacity" class="form-control" min="0"
+                    value="{% if form_action == 'edit' and aircraft_type.pax_capacity %}{{ aircraft_type.pax_capacity }}{% endif %}">
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <a href="{% url 'aircraft_types_list' %}" class="btn btn-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">
+                {% if form_action == 'new' %}Add Aircraft Type{% else %}Update Aircraft Type{% endif %}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

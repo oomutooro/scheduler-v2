@@ -1,0 +1,186 @@
+{% extends 'base.html' %}
+{% block title %}Flight Requests — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Flight Requests</h1>
+        <p class="page-subtitle">Manage seasonal flight schedules</p>
+    </div>
+    <a href="{% url 'flight_new' %}" class="btn btn-primary">+ Add Flight Request</a>
+</div>
+
+<!-- Season Filter Tabs -->
+<div class="tab-bar">
+    <a href="?season=all{{ query_suffix }}" class="tab {% if season_filter == 'all' %}tab-active{% endif %}">All ({{ total_count }})</a>
+    <a href="?season=summer{{ query_suffix }}"
+        class="tab {% if season_filter == 'summer' %}tab-active{% endif %}">Summer ({{ summer_count }})</a>
+    <a href="?season=winter{{ query_suffix }}"
+        class="tab {% if season_filter == 'winter' %}tab-active{% endif %}">Winter ({{ winter_count }})</a>
+</div>
+
+<div class="filters-card">
+    <form method="get" class="filters-grid">
+        <input type="hidden" name="season" value="{{ season_filter }}">
+
+        <div class="form-group">
+            <label class="form-label" for="airline">Airline</label>
+            <select id="airline" name="airline" class="form-control">
+                <option value="">All airlines</option>
+                {% for airline in airlines %}
+                {% if airline_filter == airline.id %}
+                <option value="{{ airline.id }}" selected>
+                    {{ airline.name }} ({{ airline.iata_code }})
+                </option>
+                {% else %}
+                <option value="{{ airline.id }}">
+                    {{ airline.name }} ({{ airline.iata_code }})
+                </option>
+                {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" for="aircraft">Aircraft Type</label>
+            <select id="aircraft" name="aircraft" class="form-control">
+                <option value="">All aircraft</option>
+                {% for ac in aircraft_types %}
+                {% if aircraft_filter == ac.id %}
+                <option value="{{ ac.id }}" selected>
+                    {{ ac.code }} — {{ ac.name }}
+                </option>
+                {% else %}
+                <option value="{{ ac.id }}">
+                    {{ ac.code }} — {{ ac.name }}
+                </option>
+                {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" for="day">Specific Day</label>
+            <select id="day" name="day" class="form-control">
+                <option value="">All days</option>
+                {% for key, label in day_options %}
+                {% if day_filter == key %}
+                <option value="{{ key }}" selected>{{ label }}</option>
+                {% else %}
+                <option value="{{ key }}">{{ label }}</option>
+                {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="filters-actions">
+            <button type="submit" class="btn btn-primary btn-sm">Apply Filters</button>
+            <a href="?season={{ season_filter }}" class="btn btn-secondary btn-sm">Reset</a>
+        </div>
+    </form>
+</div>
+
+{% if flight_rows %}
+<div class="table-card">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Flight No.</th>
+                <th>Airline</th>
+                <th>Aircraft</th>
+                <th>Route</th>
+                <th>Operation</th>
+                <th>Season / Year</th>
+                <th>Arrival</th>
+                <th>Departure</th>
+                <th>Days</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in flight_rows %}
+            <tr>
+                <td>
+                    <strong>
+                        {% if row.flight.operation_type == 'turnaround' %}
+                        {{ row.flight.arrival_flight_number|default:"-" }} / {{ row.flight.departure_flight_number|default:"-" }}
+                        {% elif row.flight.operation_type == 'arrival' %}
+                        {{ row.flight.arrival_flight_number|default:"-" }}
+                        {% else %}
+                        {{ row.flight.departure_flight_number|default:"-" }}
+                        {% endif %}
+                    </strong>
+                </td>
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    {{ row.flight.airline.name }}
+                </td>
+                <td><span class="code-badge badge-code-{{ row.flight.aircraft_type.size_code|lower }}">{{ row.flight.aircraft_type.code }}</span></td>
+                <td class="route-cell">
+                    {{ row.flight.origin.iata_code|default:"—" }} → {{ row.flight.destination.iata_code|default:"—" }}
+                </td>
+                <td>
+                    <span class="op-badge op-{{ row.flight.operation_type }}">
+                        {% if row.flight.operation_type == 'turnaround' %}Turnaround
+                        {% elif row.flight.operation_type == 'arrival' %}Arrival
+                        {% else %}Departure
+                        {% endif %}
+                    </span>
+                </td>
+                <td>{{ row.flight.season|capfirst }} {{ row.flight.year }}</td>
+                <td>{{ row.flight.arrival_time|time:"H:i"|default:"—" }}</td>
+                <td>{{ row.flight.departure_time|time:"H:i"|default:"—" }}</td>
+                <td>
+                    <div class="days-matrix-cell">
+                        <div class="days-matrix-header">
+                            {% for header in day_headers %}
+                            <span>{{ header }}</span>
+                            {% endfor %}
+                        </div>
+                        <div class="days-matrix-values">
+                            {% for is_operating in row.days_matrix %}
+                            {% if is_operating %}
+                            <span class="day-flag day-yes">Y</span>
+                            {% else %}
+                            <span class="day-flag day-no">-</span>
+                            {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                </td>
+                <td><span class="status-badge status-{{ row.flight.status }}">{{ row.flight.status|capfirst }}</span>
+                </td>
+                <td>
+                    <div class="action-buttons">
+                        <form method="post" action="{% url 'flight_approve' row.flight.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-icon btn-approve" title="Approve">✔</button>
+                        </form>
+                        <form method="post" action="{% url 'flight_reject' row.flight.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-icon btn-reject" title="Reject">✖</button>
+                        </form>
+                        <a href="{% url 'flight_edit' row.flight.pk %}" class="btn-icon btn-edit"
+                            title="Edit / Update">✎</a>
+                        <form method="post" action="{% url 'flight_delete' row.flight.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-icon btn-delete" title="Delete"
+                                onclick="return confirm('Delete this flight request?')">🗑</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">✈</div>
+    <h3>No flight requests</h3>
+    <p>Get started by adding your first flight request.</p>
+    <a href="{% url 'flight_new' %}" class="btn btn-primary">+ Add Flight Request</a>
+</div>
+{% endif %}
+{% endblock %}

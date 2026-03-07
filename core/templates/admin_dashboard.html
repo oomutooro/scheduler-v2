@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Admin Panel — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Admin Panel</h1>
+    <p class="page-subtitle">Manage system data and configuration</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;">
+    <!-- Airlines Management -->
+    <div class="section-card" style="display: flex; flex-direction: column;">
+        <div class="section-header">
+            <h2 class="section-title">✈ Airlines</h2>
+            <p class="section-sub">{{ airlines_count }} airline{{ airlines_count|pluralize }}</p>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-between; padding: 20px;">
+            <p style="color: #6c757d; margin-bottom: 20px;">
+                Manage airline information and operational details for the system.
+            </p>
+            <div style="display: flex; gap: 12px;">
+                <a href="{% url 'airlines_list' %}" class="btn btn-primary" style="flex: 1; text-align: center;">
+                    View Airlines
+                </a>
+                <a href="{% url 'airline_new' %}" class="btn btn-secondary btn-sm" style="padding: 10px 16px;">
+                    + New
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Airports Management -->
+    <div class="section-card" style="display: flex; flex-direction: column;">
+        <div class="section-header">
+            <h2 class="section-title">🌍 Airports</h2>
+            <p class="section-sub">{{ airports_count }} airport{{ airports_count|pluralize }}</p>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-between; padding: 20px;">
+            <p style="color: #6c757d; margin-bottom: 20px;">
+                Manage airport details including IATA codes and information.
+            </p>
+            <div style="display: flex; gap: 12px;">
+                <a href="{% url 'airports_list' %}" class="btn btn-primary" style="flex: 1; text-align: center;">
+                    View Airports
+                </a>
+                <a href="{% url 'airport_new' %}" class="btn btn-secondary btn-sm" style="padding: 10px 16px;">
+                    + New
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Aircraft Management -->
+    <div class="section-card" style="display: flex; flex-direction: column;">
+        <div class="section-header">
+            <h2 class="section-title">🛩 Aircraft Types</h2>
+            <p class="section-sub">{{ aircraft_count }} aircraft type{{ aircraft_count|pluralize }}</p>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-between; padding: 20px;">
+            <p style="color: #6c757d; margin-bottom: 20px;">
+                Manage aircraft types, codes, and operational specifications.
+            </p>
+            <div style="display: flex; gap: 12px;">
+                <a href="{% url 'aircraft_types_list' %}" class="btn btn-primary" style="flex: 1; text-align: center;">
+                    View Aircraft
+                </a>
+                <a href="{% url 'aircraft_type_new' %}" class="btn btn-secondary btn-sm" style="padding: 10px 16px;">
+                    + New
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

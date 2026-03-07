@@ -1,0 +1,47 @@
+# Entebbe Airport Slotting System - Project Initialization
+
+## Planning
+- [x] Create implementation plan with architecture and feature breakdown
+- [x] Get user approval on plan
+
+## Backend Setup
+- [/] Initialize Python Django project with dependencies
+- [ ] Create Django core app
+- [ ] Create database models
+  - [ ] Airlines model (IATA, ICAO, name)
+  - [ ] Airports model (IATA, ICAO, city name)
+  - [ ] Aircraft types model (code, category, wide_body flag)
+  - [ ] Flight requests model
+  - [ ] Resource allocation models (stands, gates, counters)
+- [ ] Admin panel configuration
+- [ ] Seed reference data (airlines, airports, aircraft types, stands, gates, counters)
+- [ ] Season logic (Summer/Winter date calculation)
+
+## Views & URLs
+- [ ] Dashboard stats view
+- [ ] Flight requests CRUD views
+- [ ] Daily schedule with resource allocation view
+- [ ] Resources overview view
+- [ ] Conflict detection logic integration
+
+## Frontend Pages
+- [ ] Base layout with navigation
+- [ ] Dashboard page
+- [ ] Flight Requests list page
+- [ ] New/Edit Flight Request form page
+- [ ] Daily Schedule page
+- [ ] Resources page (stands, gates, check-in counters)
+
+## Business Logic
+- [ ] Season date calculation (last Sunday of March, last Saturday of October)
+- [ ] Check-in counter allocation rules
+- [ ] Stand allocation based on aircraft code
+- [ ] Gate assignment logic
+- [ ] Conflict detection algorithm
+- [ ] Turnaround validation (same aircraft type)
+
+## Verification
+- [ ] Run server and test all pages load
+- [ ] Test flight request creation
+- [ ] Test daily schedule view
+- [ ] Test resource allocation and conflict detection

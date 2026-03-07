@@ -1,0 +1,237 @@
+{% extends 'base.html' %}
+{% block title %}Allocate Resources — {{ flight.arrival_flight_number|default:flight.departure_flight_number }} — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Allocate Resources for Entire Season</h1>
+        <p class="page-subtitle">{{ flight.airline.name }} — {{ flight.season|capfirst }} {{ flight.year }}</p>
+    </div>
+    <a href="/allocations/?season={{ season_filter }}" class="btn btn-secondary btn-sm">← Back to Allocations</a>
+</div>
+
+<!-- Flight Details Card -->
+<div class="section-card" style="margin-bottom: 24px;">
+    <div class="section-header">
+        <h2 class="section-title">Flight Details</h2>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; padding: 20px;">
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Flight Numbers</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                {% if flight.arrival_flight_number %}{{ flight.arrival_flight_number }}{% endif %}
+                {% if flight.arrival_flight_number and flight.departure_flight_number %} / {% endif %}
+                {% if flight.departure_flight_number %}{{ flight.departure_flight_number }}{% endif %}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Airline</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                <span class="airline-badge">{{ flight.airline.iata_code }}</span> {{ flight.airline.name }}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Aircraft Type</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                <span class="code-badge">{{ flight.aircraft_type.code }}</span> {{ flight.aircraft_type.name }}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Route</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                {{ flight.origin.iata_code|default:"—" }} → {{ flight.destination.iata_code|default:"—" }}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Schedule</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                {% if flight.arrival_time %}Arr: {{ flight.arrival_time|time:"H:i" }}{% endif %}
+                {% if flight.departure_time %}<br>Dep: {{ flight.departure_time|time:"H:i" }}{% endif %}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Operating Days</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                {{ days_count }} days
+            </div>
+            <div style="font-size: 12px; color: #6c757d;">
+                {{ season_start|date:"M d" }} – {{ season_end|date:"M d, Y" }}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Resource Allocation Form -->
+<form method="post" action="{% url 'flight_allocate_season_submit' flight.pk %}" style="margin-bottom: 24px;">
+    {% csrf_token %}
+    <input type="hidden" name="season" value="{{ season_filter }}">
+    
+    <!-- Parking Stands Selection -->
+    <section class="section-card" style="margin-bottom: 20px;">
+        <div class="section-header">
+            <h2 class="section-title">Select Parking Stand</h2>
+            <p class="section-sub">Choose a stand for all {{ days_count }} operating days</p>
+        </div>
+        
+        <!-- Apron 1 Stands -->
+        <div style="padding: 20px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #495057;">Apron 1 (Main)</h3>
+            <div class="stands-grid">
+                {% for stand in apron1_stands %}
+                <label class="stand-card {% if stand_map and stand in stand_map.values %}stand-selected{% endif %}" style="cursor: pointer;">
+                    <input type="radio" name="stand_id" value="{{ stand.id }}" 
+                           {% if stand_map and stand in stand_map.values %}checked{% endif %}
+                           style="position: absolute; opacity: 0;">
+                    <div class="stand-card-header">
+                        <span class="stand-name">Stand {{ stand.stand_number }}</span>
+                        <span class="size-badge size-{{ stand.size_code|lower }}">Code {{ stand.size_code }}</span>
+                    </div>
+                    <div class="stand-features">
+                        {% if stand.has_boarding_bridge %}
+                        <div class="feature feature-yes">✔ Has boarding bridge</div>
+                        {% else %}
+                        <div class="feature feature-no">✗ No boarding bridge</div>
+                        {% endif %}
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <!-- Apron 1 Extended -->
+        <div style="padding: 20px; padding-top: 0;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #495057;">Apron 1 Extended (Remote)</h3>
+            <div class="stands-grid">
+                {% for stand in apron1ext_stands %}
+                <label class="stand-card stand-remote {% if stand_map and stand in stand_map.values %}stand-selected{% endif %}" style="cursor: pointer;">
+                    <input type="radio" name="stand_id" value="{{ stand.id }}"
+                           {% if stand_map and stand in stand_map.values %}checked{% endif %}
+                           style="position: absolute; opacity: 0;">
+                    <div class="stand-card-header">
+                        <span class="stand-name">Stand {{ stand.stand_number }}</span>
+                        <span class="size-badge size-c">Code {{ stand.size_code }}</span>
+                    </div>
+                    <div class="stand-features">
+                        <div class="feature feature-no">✗ No boarding bridge</div>
+                        <div class="feature feature-info">🚌 Remote stand</div>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <div style="padding: 0 20px 20px;">
+            <label style="display: flex; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 6px; cursor: pointer;">
+                <input type="radio" name="stand_id" value="" {% if not stand_map %}checked{% endif %} style="margin-right: 8px;">
+                <span style="font-size: 14px; color: #495057;">No stand assignment</span>
+            </label>
+        </div>
+    </section>
+    
+    <!-- Gates Selection -->
+    {% if flight.operation_type != 'arrival' %}
+    <section class="section-card" style="margin-bottom: 20px;">
+        <div class="section-header">
+            <h2 class="section-title">Select Gate</h2>
+            <p class="section-sub">Choose a gate for departures</p>
+        </div>
+        <div style="padding: 20px;">
+            <div class="gates-grid">
+                {% for gate in all_gates %}
+                <label class="gate-card {% if gate.has_boarding_bridge %}gate-bridge{% endif %} {% if gate_map and gate in gate_map.values %}gate-selected{% endif %}" style="cursor: pointer;">
+                    <input type="radio" name="gate_id" value="{{ gate.id }}"
+                           {% if gate_map and gate in gate_map.values %}checked{% endif %}
+                           style="position: absolute; opacity: 0;">
+                    <div class="gate-card-header">
+                        <span class="gate-name">Gate {{ gate.gate_number }}</span>
+                        {% if gate.has_boarding_bridge %}
+                        <span class="bridge-badge">Bridge</span>
+                        {% endif %}
+                    </div>
+                    {% if gate.has_boarding_bridge and gate.connected_stand %}
+                    <div class="gate-info">
+                        <span class="gate-feature">Stand {{ gate.connected_stand.stand_number }}</span>
+                    </div>
+                    {% endif %}
+                </label>
+                {% endfor %}
+            </div>
+            
+            <label style="display: flex; align-items: center; padding: 12px; background: #f8f9fa; border-radius: 6px; cursor: pointer; margin-top: 12px;">
+                <input type="radio" name="gate_id" value="" {% if not gate_map %}checked{% endif %} style="margin-right: 8px;">
+                <span style="font-size: 14px; color: #495057;">No gate assignment</span>
+            </label>
+        </div>
+    </section>
+    {% endif %}
+    
+    <!-- Check-in Counters -->
+    {% if flight.operation_type != 'arrival' %}
+    <section class="section-card" style="margin-bottom: 20px;">
+        <div class="section-header">
+            <h2 class="section-title">Select Check-in Counters</h2>
+            <p class="section-sub">Assign counter range for departures</p>
+        </div>
+        <div style="padding: 20px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 600px;">
+                <div class="form-group">
+                    <label class="form-label">Counter From</label>
+                    <input type="number" name="counter_from" class="form-control" min="1" max="50" 
+                           placeholder="e.g., 1">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Counter To</label>
+                    <input type="number" name="counter_to" class="form-control" min="1" max="50"
+                           placeholder="e.g., 4">
+                </div>
+            </div>
+            <div style="margin-top: 8px; font-size: 12px; color: #6c757d;">
+                Example ranges: 1-2 (2 counters), 1-4 (4 counters), 5-9 (5 counters)
+            </div>
+        </div>
+    </section>
+    {% endif %}
+    
+    <!-- Submit Buttons -->
+    <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <a href="/allocations/?season={{ season_filter }}" class="btn btn-secondary">Cancel</a>
+        <button type="submit" class="btn btn-success" style="min-width: 200px;">
+            💾 Save & Apply to All {{ days_count }} Days
+        </button>
+    </div>
+</form>
+
+<style>
+.stand-card, .gate-card {
+    transition: all 0.2s ease;
+    border: 2px solid transparent;
+}
+
+.stand-card:hover, .gate-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.stand-card input[type="radio"]:checked ~ .stand-card-header,
+.gate-card input[type="radio"]:checked ~ .gate-card-header {
+    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+    color: white;
+}
+
+.stand-card input[type="radio"]:checked ~ .stand-card-header .size-badge,
+.gate-card input[type="radio"]:checked ~ .gate-card-header .bridge-badge {
+    background: rgba(255,255,255,0.3);
+    color: white;
+}
+
+.stand-selected, .gate-selected {
+    border-color: #4CAF50;
+    background: #f0f9f0;
+}
+
+label:has(input[type="radio"]) {
+    position: relative;
+}
+</style>
+
+{% endblock %}

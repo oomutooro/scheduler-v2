@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% block title %}Daily Schedule — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Daily Schedule</h1>
+    <p class="page-subtitle">View flight schedule and resource allocation</p>
+</div>
+
+<!-- Date Picker + Stats -->
+<div class="schedule-header-card">
+    <div class="schedule-date-row">
+        <span class="label-text">Select Date</span>
+        <form method="get" id="date-form" class="date-form">
+            <input type="date" id="date-picker" name="date" value="{{ date_str }}" class="date-input"
+                onchange="this.form.submit()">
+        </form>
+    </div>
+    <div class="schedule-stats-row">
+        <div class="sched-stat sched-stat-blue">
+            <div class="sched-stat-label">Total Flights</div>
+            <div class="sched-stat-value">{{ total_flights }}</div>
+            <span class="sched-stat-icon">✈</span>
+        </div>
+        <div class="sched-stat sched-stat-green">
+            <div class="sched-stat-label">Successfully Allocated</div>
+            <div class="sched-stat-value">{{ allocated_count }}</div>
+            <span class="sched-stat-icon">✔</span>
+        </div>
+        <div class="sched-stat sched-stat-red">
+            <div class="sched-stat-label">Conflicts Detected</div>
+            <div class="sched-stat-value">{{ conflict_count }}</div>
+            <span class="sched-stat-icon">⚠</span>
+        </div>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="schedule-actions">
+        <form method="post" action="{% url 'schedule_allocate' %}">
+            {% csrf_token %}
+            <input type="hidden" name="date" value="{{ date_str }}">
+            <button type="submit" class="btn btn-primary">⚡ Auto-Allocate Resources</button>
+        </form>
+        {% if total_flights > 0 %}
+        <form method="post" action="{% url 'schedule_clear' %}">
+            {% csrf_token %}
+            <input type="hidden" name="date" value="{{ date_str }}">
+            <button type="submit" class="btn btn-secondary btn-sm"
+                onclick="return confirm('Clear all allocations for this date?')">✕ Clear Allocations</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if flight_rows %}
+<div class="table-card">
+    <table class="data-table schedule-table">
+        <thead>
+            <tr>
+                <th>Airline</th>
+                <th>Flight No.</th>
+                <th>Aircraft</th>
+                <th>Route</th>
+                <th>Operation</th>
+                <th>Arrival</th>
+                <th>Departure</th>
+                <th>Stand</th>
+                <th>Gate</th>
+                <th>Check-in</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in flight_rows %}
+            <tr
+                class="{% if row.flight.status == 'conflict' %}row-conflict{% elif row.allocated %}row-allocated{% endif %}">
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    <br><small>{{ row.flight.airline.name }}</small>
+                </td>
+                <td>
+                    <strong>
+                        {% if row.flight.operation_type == 'turnaround' %}
+                        {{ row.flight.arrival_flight_number|default:"-" }} / {{ row.flight.departure_flight_number|default:"-" }}
+                        {% elif row.flight.operation_type == 'arrival' %}
+                        {{ row.flight.arrival_flight_number|default:"-" }}
+                        {% else %}
+                        {{ row.flight.departure_flight_number|default:"-" }}
+                        {% endif %}
+                    </strong>
+                </td>
+                <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
+                <td>{{ row.flight.origin.iata_code|default:"—" }} → {{ row.flight.destination.iata_code|default:"—" }}
+                </td>
+                <td><span class="op-badge op-{{ row.flight.operation_type }}">
+                    {% if row.flight.operation_type == 'turnaround' %}Turnaround
+                    {% elif row.flight.operation_type == 'arrival' %}Arrival
+                    {% else %}Departure{% endif %}
+                </span></td>
+                <td>{{ row.flight.arrival_time|time:"H:i"|default:"—" }}</td>
+                <td>{{ row.flight.departure_time|time:"H:i"|default:"—" }}</td>
+                <td>
+                    {% if row.stand %}
+                    <span class="resource-badge resource-stand">Stand {{ row.stand.stand.stand_number }}</span>
+                    <br><small>{{ row.stand.start_time|time:"H:i" }} – {{ row.stand.end_time|time:"H:i" }}</small>
+                    {% else %}
+                    <span class="unallocated">—</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.gate %}
+                    <span class="resource-badge resource-gate">Gate {{ row.gate.gate.gate_number }}</span>
+                    <br><small>closes {{ row.gate.end_time|time:"H:i" }}</small>
+                    {% else %}
+                    <span class="unallocated">—</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.checkin %}
+                    <span class="resource-badge resource-checkin">C {{ row.checkin.counter_from }}–{{ row.checkin.counter_to }}</span>
+                    <br><small>{{ row.checkin.start_time|time:"H:i" }} – {{ row.checkin.end_time|time:"H:i" }}</small>
+                    {% else %}
+                    {% if row.flight.operation_type == 'arrival' %}
+                    <span class="na-badge">N/A</span>
+                    {% else %}
+                    <span class="unallocated">—</span>
+                    {% endif %}
+                    {% endif %}
+                </td>
+                <td><span class="status-badge status-{{ row.flight.status }}">{{ row.flight.status|capfirst }}</span>
+                </td>
+                <td>
+                    <div class="action-buttons">
+                        <form method="post" action="{% url 'flight_approve' row.flight.pk %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ schedule_return_url }}">
+                            <button type="submit" class="btn-icon btn-approve" title="Approve">✔</button>
+                        </form>
+                        <form method="post" action="{% url 'flight_reject' row.flight.pk %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ schedule_return_url }}">
+                            <button type="submit" class="btn-icon btn-reject" title="Reject">✖</button>
+                        </form>
+                        <a href="{% url 'schedule_allocate_manual' row.flight.pk %}?date={{ date_str }}" class="btn-icon btn-allocate" title="Manual Allocate">⚙</a>
+                        <a href="{% url 'flight_edit' row.flight.pk %}?next={{ schedule_return_url|urlencode }}" class="btn-icon btn-edit" title="Edit / Update">✎</a>
+                        <form method="post" action="{% url 'flight_delete' row.flight.pk %}" onsubmit="return confirm('Delete this flight request?')">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ schedule_return_url }}">
+                            <button type="submit" class="btn-icon btn-delete" title="Delete">🗑</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">📅</div>
+    <h3>No flights scheduled</h3>
+    <p>There are no flights scheduled for {{ selected_date|date:"F d, Y" }}.</p>
+</div>
+{% endif %}
+{% endblock %}

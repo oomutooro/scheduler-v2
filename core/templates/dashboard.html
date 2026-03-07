@@ -1,0 +1,88 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Entebbe International Airport</h1>
+    <p class="page-subtitle">Flight Slotting and Resource Management System</p>
+</div>
+
+<!-- Stats Cards -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-card-icon stat-icon-blue">✈</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ total_count }}</div>
+            <div class="stat-label">Total Flight Requests</div>
+            <div class="stat-sub">Summer: {{ summer_count }} | Winter: {{ winter_count }}</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-icon stat-icon-green">🔳</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ gates_count }}</div>
+            <div class="stat-label">Available Gates</div>
+            <div class="stat-sub">Gates 1, 2A, 2B, 3A, 3B, 4</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-icon stat-icon-purple">🅿</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ stands_count }}</div>
+            <div class="stat-label">Parking Stands</div>
+            <div class="stat-sub">Apron 1 + Apron 1 Extended</div>
+        </div>
+    </div>
+</div>
+
+<!-- Season Information -->
+<section class="section-card">
+    <h2 class="section-title">Season Information</h2>
+    <div class="season-grid">
+        <div class="season-card summer-card">
+            <div class="season-card-header">
+                <span class="season-icon">☀</span>
+                <h3>Summer Season</h3>
+            </div>
+            <p class="season-desc">Last Sunday of March to Last Saturday of October</p>
+            <p class="season-example">Example: Summer 2026 ({{ summer_start_2026|date:"d M Y" }} – {{
+                summer_end_2026|date:"d M Y" }})</p>
+        </div>
+        <div class="season-card winter-card">
+            <div class="season-card-header">
+                <span class="season-icon">❄</span>
+                <h3>Winter Season</h3>
+            </div>
+            <p class="season-desc">Last Saturday of October to Last Sunday of March (next year)</p>
+            <p class="season-example">Example: Winter 2025 ({{ winter_start_2025|date:"d M Y" }} – {{
+                winter_end_2025_26|date:"d M Y" }})</p>
+        </div>
+    </div>
+</section>
+
+<!-- Quick Actions -->
+<section class="section-card">
+    <h2 class="section-title">Quick Actions</h2>
+    <div class="quick-actions-grid">
+        <a href="{% url 'flight_new' %}" class="quick-action-btn qa-blue">
+            <span>✈</span> Add Flight Request
+        </a>
+        <a href="{% url 'schedule' %}" class="quick-action-btn qa-green">
+            <span>📅</span> View Daily Schedule
+        </a>
+        <a href="{% url 'resources' %}" class="quick-action-btn qa-purple">
+            <span>🗄</span> View Resources
+        </a>
+    </div>
+</section>
+
+{% if total_count == 0 %}
+<div class="empty-notice">
+    <span class="info-icon">ℹ</span>
+    <div>
+        <strong>No flight requests yet</strong><br>
+        <small>Get started by adding your first flight request. Click "Add Flight Request" above.</small>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

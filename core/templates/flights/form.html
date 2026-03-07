@@ -1,0 +1,212 @@
+{% extends 'base.html' %}
+{% block title %}{% if form_action == 'new' %}New{% else %}Edit{% endif %} Flight Request — Entebbe Airport Slotting
+System{% endblock %}
+
+{% block content %}
+<div class="back-link">
+    <a href="{% if next_url %}{{ next_url }}{% else %}{% url 'flights_list' %}{% endif %}">← Back</a>
+</div>
+
+<h1 class="page-title">{% if form_action == 'new' %}New{% else %}Edit{% endif %} Flight Request</h1>
+
+<div class="form-card">
+    <form method="post"
+        action="{% if form_action == 'new' %}{% url 'flight_create' %}{% else %}{% url 'flight_update' flight.pk %}{% endif %}">
+        {% csrf_token %}
+        {% if next_url %}
+        <input type="hidden" name="next" value="{{ next_url }}">
+        {% endif %}
+
+        <div class="form-grid-2">
+            <!-- Airline -->
+            <div class="form-group">
+                <label class="form-label" for="airline_id">Airline Name *</label>
+                <select id="airline_id" name="airline_id" class="form-control" required>
+                    <option value="">— Select Airline —</option>
+                    {% for airline in airlines %}
+                    <option value="{{ airline.id }}" {% if form_action == 'edit' and flight.airline_id == airline.id %}selected{% endif %}>
+                        {{ airline.name }} ({{ airline.iata_code }}/{{ airline.icao_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Aircraft Type -->
+            <div class="form-group">
+                <label class="form-label" for="aircraft_type_id">Aircraft Type *</label>
+                <select id="aircraft_type_id" name="aircraft_type_id" class="form-control" required>
+                    <option value="">— Select Aircraft —</option>
+                    {% for ac in aircraft_types %}
+                    <option value="{{ ac.id }}" data-wide="{{ ac.is_wide_body }}" {% if form_action == 'edit' and flight.aircraft_type_id == ac.id %}selected{% endif %}>
+                        {{ ac.code }} — {{ ac.name }} (Code {{ ac.size_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Operation Type -->
+            <div class="form-group">
+                <label class="form-label" for="operation_type">Operation Type *</label>
+                <select id="operation_type" name="operation_type" class="form-control" required>
+                    <option value="turnaround" {% if form_action == 'edit' and flight.operation_type == 'turnaround' %}selected{% endif %}>Turnaround (Arrival + Departure)</option>
+                    <option value="arrival" {% if form_action == 'edit' and flight.operation_type == 'arrival' %}selected{% endif %}>Arrival Only</option>
+                    <option value="departure" {% if form_action == 'edit' and flight.operation_type == 'departure' %}selected{% endif %}>Departure Only</option>
+                </select>
+            </div>
+
+            <!-- Season -->
+            <div class="form-group">
+                <label class="form-label" for="season">Season *</label>
+                <select id="season" name="season" class="form-control" required>
+                    <option value="summer" {% if form_action == 'edit' and flight.season == 'summer' %}selected{% endif %}>Summer</option>
+                    <option value="winter" {% if form_action == 'edit' and flight.season == 'winter' %}selected{% endif %}>Winter</option>
+                </select>
+                <small class="form-hint" id="season-hint">Summer {{ current_year }} ({{ summer_start|date:"d N Y" }} –
+                    {{ summer_end|date:"d N Y" }})</small>
+            </div>
+
+            <!-- Year -->
+            <div class="form-group">
+                <label class="form-label" for="year">Year *</label>
+                <input type="number" id="year" name="year" class="form-control"
+                    value="{% if form_action == 'edit' %}{{ flight.year }}{% else %}{{ current_year }}{% endif %}"
+                    min="2020" max="2099" required>
+            </div>
+
+            <!-- Arrival Flight Number -->
+            <div class="form-group arrival-field">
+                <label class="form-label" for="arrival_flight_number">Arrival Flight Number</label>
+                <input type="text" id="arrival_flight_number" name="arrival_flight_number" class="form-control"
+                    placeholder="e.g., EK729"
+                    value="{% if form_action == 'edit' %}{{ flight.arrival_flight_number }}{% endif %}">
+            </div>
+
+            <!-- Departure Flight Number -->
+            <div class="form-group departure-field">
+                <label class="form-label" for="departure_flight_number">Departure Flight Number</label>
+                <input type="text" id="departure_flight_number" name="departure_flight_number" class="form-control"
+                    placeholder="e.g., EK730"
+                    value="{% if form_action == 'edit' %}{{ flight.departure_flight_number }}{% endif %}">
+            </div>
+
+            <!-- Arrival Time -->
+            <div class="form-group arrival-field">
+                <label class="form-label" for="arrival_time">Arrival Time *</label>
+                <input type="time" id="arrival_time" name="arrival_time" class="form-control"
+                    value="{% if form_action == 'edit' and flight.arrival_time %}{{ flight.arrival_time|time:'H:i' }}{% endif %}">
+            </div>
+
+            <!-- Departure Time -->
+            <div class="form-group departure-field">
+                <label class="form-label" for="departure_time">Departure Time *</label>
+                <input type="time" id="departure_time" name="departure_time" class="form-control"
+                    value="{% if form_action == 'edit' and flight.departure_time %}{{ flight.departure_time|time:'H:i' }}{% endif %}">
+            </div>
+
+            <!-- Origin -->
+            <div class="form-group arrival-field">
+                <label class="form-label" for="origin_id">Origin Airport</label>
+                <select id="origin_id" name="origin_id" class="form-control">
+                    <option value="">— Select Origin —</option>
+                    {% for airport in airports %}
+                    <option value="{{ airport.id }}" {% if form_action == 'edit' and flight.origin_id == airport.id %}selected{% endif %}>
+                        {{ airport.iata_code }} — {{ airport.city_name }} ({{ airport.country }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Destination -->
+            <div class="form-group departure-field">
+                <label class="form-label" for="destination_id">Destination Airport</label>
+                <select id="destination_id" name="destination_id" class="form-control">
+                    <option value="">— Select Destination —</option>
+                    {% for airport in airports %}
+                    <option value="{{ airport.id }}" {% if form_action == 'edit' and flight.destination_id == airport.id %}selected{% endif %}>
+                        {{ airport.iata_code }} — {{ airport.city_name }} ({{ airport.country }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- Season Date Range (partial season) -->
+        <div class="form-section">
+            <h3 class="form-section-title">Season Date Range <span class="optional-tag">(leave blank for full
+                    season)</span></h3>
+            <div class="form-grid-2">
+                <div class="form-group">
+                    <label class="form-label" for="valid_from">Valid From</label>
+                    <input type="date" id="valid_from" name="valid_from" class="form-control"
+                        value="{% if form_action == 'edit' and flight.valid_from %}{{ flight.valid_from|date:'Y-m-d' }}{% endif %}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="valid_to">Valid To</label>
+                    <input type="date" id="valid_to" name="valid_to" class="form-control"
+                        value="{% if form_action == 'edit' and flight.valid_to %}{{ flight.valid_to|date:'Y-m-d' }}{% endif %}">
+                </div>
+            </div>
+        </div>
+
+        <!-- Days of Operation -->
+        <div class="form-section">
+            <h3 class="form-section-title">Days of Operation *</h3>
+            <div class="days-grid">
+                {% for day in days %}
+                {% with day_lower=day|lower %}
+                <label class="day-checkbox">
+                    <input type="checkbox" name="day_{{ day_lower }}" {% if form_action != 'edit' %}checked{% endif %}
+                        class="day-input" data-day="{{ day_lower }}">
+                    <span class="day-label">{{ day }}</span>
+                </label>
+                {% endwith %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Notes -->
+        <div class="form-group">
+            <label class="form-label" for="notes">Notes</label>
+            <textarea id="notes" name="notes" class="form-control" rows="3"
+                placeholder="Any additional information...">{% if form_action == 'edit' %}{{ flight.notes }}{% endif %}</textarea>
+        </div>
+
+        <!-- Actions -->
+        <div class="form-actions">
+            <a href="{% if next_url %}{{ next_url }}{% else %}{% url 'flights_list' %}{% endif %}" class="btn btn-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">
+                {% if form_action == 'new' %}Save Flight Request{% else %}Update Flight Request{% endif %}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        var opType = document.getElementById('operation_type');
+
+        function updateFormFields() {
+            var val = opType.value;
+            var arrivalFields = document.querySelectorAll('.arrival-field');
+            var departureFields = document.querySelectorAll('.departure-field');
+            arrivalFields.forEach(function (f) { f.style.display = (val === 'departure') ? 'none' : ''; });
+            departureFields.forEach(function (f) { f.style.display = (val === 'arrival') ? 'none' : ''; });
+        }
+
+        opType.addEventListener('change', updateFormFields);
+        updateFormFields();
+
+        // Pre-check days for edit mode using bitmask from server
+        {% if form_action == 'edit' %}
+        var dayMask = {{ day_mask }};
+        var dayMap = { sunday: 1, monday: 2, tuesday: 4, wednesday: 8, thursday: 16, friday: 32, saturday: 64 };
+        document.querySelectorAll('.day-input').forEach(function (cb) {
+            var day = cb.dataset.day;
+            cb.checked = !!(dayMask & dayMap[day]);
+        });
+        {% endif %}
+});
+</script>
+{% endblock %}

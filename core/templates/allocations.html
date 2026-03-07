@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+{% block title %}Season Resource Allocation — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Season Resource Allocation</h1>
+        <p class="page-subtitle">Assign resources to flights for {{ current_season }} {{ current_year }}</p>
+    </div>
+    <a href="{% url 'schedule' %}" class="btn btn-secondary btn-sm">View Daily Schedule</a>
+</div>
+
+<!-- Season Filter Tabs -->
+<div class="tab-bar">
+    <a href="?season=all" class="tab {% if season_filter == 'all' %}tab-active{% endif %}">All ({{ total_count }})</a>
+    <a href="?season=summer" class="tab {% if season_filter == 'summer' %}tab-active{% endif %}">Summer ({{ summer_count }})</a>
+    <a href="?season=winter" class="tab {% if season_filter == 'winter' %}tab-active{% endif %}">Winter ({{ winter_count }})</a>
+</div>
+
+<!-- Airline Filter -->
+<div class="filters-card">
+    <form method="get" class="filters-grid">
+        <input type="hidden" name="season" value="{{ season_filter }}">
+
+        <div class="form-group">
+            <label class="form-label" for="airline">Filter by Airline</label>
+            <select id="airline" name="airline" class="form-control">
+                <option value="">All airlines</option>
+                {% for airline in airlines %}
+                {% if airline_filter == airline.id %}
+                <option value="{{ airline.id }}" selected>
+                    {{ airline.name }} ({{ airline.iata_code }})
+                </option>
+                {% else %}
+                <option value="{{ airline.id }}">
+                    {{ airline.name }} ({{ airline.iata_code }})
+                </option>
+                {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="filters-actions">
+            <button type="submit" class="btn btn-primary btn-sm">Apply Filter</button>
+            <a href="?season={{ season_filter }}" class="btn btn-secondary btn-sm">Reset</a>
+        </div>
+    </form>
+</div>
+
+{% if flight_rows %}
+<form method="post" action="{% url 'season_allocations_auto' %}" id="auto-allocation-form">
+    {% csrf_token %}
+    <input type="hidden" name="season" value="{{ season_filter }}">
+
+    <div style="display: flex; gap: 12px; margin-bottom: 20px; align-items: center;">
+        <button type="button" class="btn btn-primary btn-sm" onclick="selectAll('allocation-checkbox')">
+            Select All
+        </button>
+        <button type="submit" class="btn btn-success"
+            onclick="return confirm('Auto-allocate resources to selected flights for entire season?')">
+            🤖 Auto Allocate Selected
+        </button>
+        <span style="color: #6c757d; font-size: 14px;">
+            Select flights and click Auto Allocate, or click on a flight to manually assign resources
+        </span>
+    </div>
+
+    <div class="table-card">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th style="width: 30px;">
+                        <input type="checkbox" id="select-all-checkbox" onchange="toggleSelectAll(this)">
+                    </th>
+                    <th>Flight</th>
+                    <th>Airline</th>
+                    <th>Aircraft</th>
+                    <th>Route</th>
+                    <th>Arrival</th>
+                    <th>Departure</th>
+                    <th>Assigned Stand</th>
+                    <th>Assigned Gate</th>
+                    <th>Check-in</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in flight_rows %}
+                <tr class="{% if row.has_conflict %}row-conflict{% elif row.allocated %}row-allocated{% endif %} clickable-row"
+                    data-href="{% url 'flight_allocate_season' row.flight.pk %}?season={{ season_filter }}"
+                    title="Click to allocate resources">
+                    <td onclick="event.stopPropagation();">
+                        <input type="checkbox" name="flight_ids" value="{{ row.flight.pk }}"
+                            class="allocation-checkbox">
+                    </td>
+                    <td>
+                        <strong>
+                            {% if row.flight.arrival_flight_number %}
+                            {{ row.flight.arrival_flight_number }}
+                            {% endif %}
+                            {% if row.flight.departure_flight_number %}
+                            {% if row.flight.arrival_flight_number %} / {% endif %}
+                            {{ row.flight.departure_flight_number }}
+                            {% endif %}
+                        </strong>
+                    </td>
+                    <td>
+                        <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                        <br><small>{{ row.flight.airline.name|truncatewords:2 }}</small>
+                    </td>
+                    <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
+                    <td class="route-cell">
+                        {{ row.flight.origin.iata_code|default:"—" }} → {{ row.flight.destination.iata_code|default:"—" }}
+                    </td>
+                    <td>{{ row.flight.arrival_time|time:"H:i"|default:"—" }}</td>
+                    <td>{{ row.flight.departure_time|time:"H:i"|default:"—" }}</td>
+                    <td>
+                        {% if row.stand %}
+                        <span class="resource-badge resource-stand">Stand {{ row.stand.stand_number }}</span>
+                        {% else %}
+                        <span class="unallocated">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.gate %}
+                        <span class="resource-badge resource-gate">Gate {{ row.gate.gate_number }}</span>
+                        {% else %}
+                        <span class="unallocated">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.checkin %}
+                        <span class="resource-badge resource-checkin">{{ row.checkin }}</span>
+                        {% else %}
+                        <span class="unallocated">—</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="status-badge status-{{ row.flight.status }}">{{ row.flight.status|capfirst }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</form>
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">📋</div>
+    <h3>No flights for allocation</h3>
+    <p>No flights found for the selected period and filters.</p>
+</div>
+{% endif %}
+
+<script>
+    function selectAll(className) {
+        document.querySelectorAll('.' + className).forEach(cb => cb.checked = true);
+    }
+
+    function toggleSelectAll(checkbox) {
+        document.querySelectorAll('.allocation-checkbox').forEach(cb => cb.checked = checkbox.checked);
+    }
+
+    // Handle clickable rows
+    document.querySelectorAll('.clickable-row').forEach(row => {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', function () {
+            window.location = this.getAttribute('data-href');
+        });
+    });
+</script>
+{% endblock %}

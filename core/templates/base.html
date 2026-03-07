@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Entebbe Airport Slotting System{% endblock %}</title>
+    <meta name="description" content="Entebbe International Airport — Flight Slotting and Resource Management System">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-inner">
+            <a href="{% url 'dashboard' %}" class="navbar-brand">
+                <span class="brand-icon">✈</span>
+                <span class="brand-text">Entebbe Airport Slotting System</span>
+            </a>
+            <ul class="navbar-nav">
+                <li><a href="{% url 'dashboard' %}" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">
+                    <span class="nav-icon">⊞</span> Dashboard
+                </a></li>
+                <li><a href="{% url 'flights_list' %}" class="nav-link {% if active_page == 'flights' %}active{% endif %}">
+                    <span class="nav-icon">☰</span> Flight Requests
+                </a></li>
+                <li><a href="{% url 'season_allocations' %}" class="nav-link {% if active_page == 'allocations' %}active{% endif %}">
+                    <span class="nav-icon">⚙</span> Allocations
+                </a></li>
+                <li><a href="{% url 'schedule' %}" class="nav-link {% if active_page == 'schedule' %}active{% endif %}">
+                    <span class="nav-icon">📅</span> Daily Schedule
+                </a></li>
+                <li><a href="{% url 'resources' %}" class="nav-link {% if active_page == 'resources' %}active{% endif %}">
+                    <span class="nav-icon">🗄</span> Resources
+                </a></li>
+                <li class="navbar-divider"></li>
+                <li><a href="{% url 'admin_dashboard' %}" class="nav-link {% if active_page == 'admin' %}active{% endif %}">
+                    <span class="nav-icon">⚙</span> Admin
+                </a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        {% if messages %}
+        <div class="messages-container">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }}">
+                <span class="alert-icon">{% if message.tags == 'success' %}✓{% elif message.tags == 'error' %}✕{% else %}ℹ{% endif %}</span>
+                {{ message }}
+                <button class="alert-close" onclick="this.parentElement.remove()">×</button>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="{% static 'js/app.js' %}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

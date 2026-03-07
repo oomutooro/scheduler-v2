@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% block title %}Allocate Resources — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="back-link">
+    <a href="{% url 'schedule' %}?date={{ date_str }}">← Back to Schedule</a>
+</div>
+
+<h1 class="page-title">Manual Resource Allocation</h1>
+<p class="page-subtitle">
+    {% if flight.operation_type == 'turnaround' %}
+    {{ flight.arrival_flight_number }} / {{ flight.departure_flight_number }}
+    {% elif flight.operation_type == 'arrival' %}
+    {{ flight.arrival_flight_number }}
+    {% else %}
+    {{ flight.departure_flight_number }}
+    {% endif %}
+    — {{ flight.airline.name }} ({{ flight.airline.iata_code }})
+</p>
+
+<div class="form-card">
+    <form method="post" action="{% url 'schedule_allocate_manual_submit' flight.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="date" value="{{ date_str }}">
+
+        <div class="allocation-grid">
+            <!-- Parking Stand -->
+            <div class="allocation-section">
+                <h3 class="form-section-title">Parking Stand ({{ flight.aircraft_type.code }})</h3>
+                {% if available_stands %}
+                <div class="form-group">
+                    <label class="form-label" for="stand_id">Select Stand</label>
+                    <select id="stand_id" name="stand_id" class="form-control" required>
+                        <option value="">— No Stand (Arrival only) —</option>
+                        {% for stand in available_stands %}
+                        <option value="{{ stand.id }}">
+                            Stand {{ stand.stand_number }} (Code {{ stand.size_code }}{% if stand.has_boarding_bridge %}, Bridge{% endif %})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% else %}
+                <p class="status-message status-warning">No available parking stands for this flight.</p>
+                {% endif %}
+            </div>
+
+            <!-- Gate -->
+            {% if flight.operation_type != 'arrival' %}
+            <div class="allocation-section">
+                <h3 class="form-section-title">Gate</h3>
+                {% if available_gates %}
+                <div class="form-group">
+                    <label class="form-label" for="gate_id">Select Gate</label>
+                    <select id="gate_id" name="gate_id" class="form-control" required>
+                        <option value="">— No Gate (Optional) —</option>
+                        {% for gate in available_gates %}
+                        <option value="{{ gate.id }}">
+                            Gate {{ gate.gate_number }}{% if gate.has_boarding_bridge %} (Bridge){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% else %}
+                <p class="status-message status-warning">No available gates for this flight.</p>
+                {% endif %}
+            </div>
+
+            <!-- Check-in Counters -->
+            <div class="allocation-section">
+                <h3 class="form-section-title">Check-in Counters</h3>
+                {% if available_counters %}
+                <div class="form-group">
+                    <label class="form-label" for="counter_range">Select Counter Range</label>
+                    <select id="counter_range" name="counter_range" class="form-control">
+                        <option value="">— No Check-in (Arrival only) —</option>
+                        {% for start, end in available_counters %}
+                        <option value="{{ start }}-{{ end }}">
+                            Counters {{ start }}–{{ end }} ({{ end|add:1|add:-start }} counters)
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% else %}
+                <p class="status-message status-warning">No available check-in counter ranges for this flight.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Flight Details Summary -->
+        <div class="allocation-summary">
+            <h3 class="form-section-title">Flight Details</h3>
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <span class="summary-label">Date:</span>
+                    <span class="summary-value">{{ selected_date|date:"F d, Y" }}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Arrival:</span>
+                    <span class="summary-value">{{ flight.arrival_time|time:"H:i"|default:"—" }}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Departure:</span>
+                    <span class="summary-value">{{ flight.departure_time|time:"H:i"|default:"—" }}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Aircraft:</span>
+                    <span class="summary-value">{{ flight.aircraft_type.code }} (Code {{ flight.aircraft_type.size_code }})</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="form-actions">
+            <a href="{% url 'schedule' %}?date={{ date_str }}" class="btn btn-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">Allocate Resources</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

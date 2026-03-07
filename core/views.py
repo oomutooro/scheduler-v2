@@ -1,0 +1,1366 @@
+"""
+Core views for Entebbe Airport Slotting System.
+"""
+
+from datetime import date, datetime, timedelta, time
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib import messages
+from django.http import JsonResponse
+from django.views.decorators.http import require_POST
+from django.utils.safestring import mark_safe
+from django.db.models import Q, Count
+from urllib.parse import urlencode
+import json
+
+from core.models import (
+    Airline, Airport, AircraftType, FlightRequest, ParkingStand, Gate,
+    CheckInCounter, StandAllocation, GateAllocation, CheckInAllocation, DAY_MASK
+)
+from core.services.season import (
+    get_current_season, get_season_dates, get_summer_dates, get_winter_dates
+)
+from core.services.allocation import allocate_resources_for_date
+
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+
+def dashboard(request):
+    season_name, year, season_start, season_end = get_current_season()
+
+    # Counts
+    summer_count = FlightRequest.objects.filter(season='summer').count()
+    winter_count = FlightRequest.objects.filter(season='winter').count()
+    total_count = summer_count + winter_count
+
+    gates_count = Gate.objects.filter(is_active=True).count()
+    stands_count = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True).count()
+
+    # This year's seasons
+    summer_start_2026, summer_end_2026 = get_summer_dates(2026)
+    winter_start_2025, winter_end_2025_26 = get_winter_dates(2025)
+
+    context = {
+        'current_season': season_name,
+        'current_year': year,
+        'season_start': season_start,
+        'season_end': season_end,
+        'summer_count': summer_count,
+        'winter_count': winter_count,
+        'total_count': total_count,
+        'gates_count': gates_count,
+        'stands_count': stands_count,
+        'summer_start_2026': summer_start_2026,
+        'summer_end_2026': summer_end_2026,
+        'winter_start_2025': winter_start_2025,
+        'winter_end_2025_26': winter_end_2025_26,
+        'active_page': 'dashboard',
+    }
+    return render(request, 'dashboard.html', context)
+
+
+def admin_dashboard(request):
+    """Admin panel for managing airlines, airports, and aircraft."""
+    airlines_count = Airline.objects.count()
+    airports_count = Airport.objects.count()
+    aircraft_count = AircraftType.objects.count()
+    
+    context = {
+        'airlines_count': airlines_count,
+        'airports_count': airports_count,
+        'aircraft_count': aircraft_count,
+        'active_page': 'admin',
+    }
+    return render(request, 'admin_dashboard.html', context)
+
+
+# ─── Flight Requests ──────────────────────────────────────────────────────────
+
+DAY_ORDER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+
+def _days_matrix(mask):
+    return [bool(mask & DAY_MASK[day]) for day in DAY_ORDER]
+
+
+def _redirect_to_next_or_default(request, default_url_name, **kwargs):
+    next_url = request.POST.get('next', '').strip()
+    if next_url:
+        return redirect(next_url)
+    return redirect(default_url_name, **kwargs)
+
+def flights_list(request):
+    season_filter = request.GET.get('season', 'all')
+    airline_filter = request.GET.get('airline', '').strip()
+    aircraft_filter = request.GET.get('aircraft', '').strip()
+    day_filter = request.GET.get('day', '').strip().lower()
+
+    qs = FlightRequest.objects.select_related('airline', 'aircraft_type', 'origin', 'destination')
+
+    if season_filter in ('summer', 'winter'):
+        qs = qs.filter(season=season_filter)
+    if airline_filter.isdigit():
+        qs = qs.filter(airline_id=int(airline_filter))
+    if aircraft_filter.isdigit():
+        qs = qs.filter(aircraft_type_id=int(aircraft_filter))
+
+    flights_data = []
+    for flight in qs.order_by('-created_at'):
+        if day_filter in DAY_MASK and not (flight.days_of_operation & DAY_MASK[day_filter]):
+            continue
+        flights_data.append({
+            'flight': flight,
+            'days_matrix': _days_matrix(flight.days_of_operation),
+        })
+
+    query_params = {}
+    if airline_filter:
+        query_params['airline'] = airline_filter
+    if aircraft_filter:
+        query_params['aircraft'] = aircraft_filter
+    if day_filter in DAY_MASK:
+        query_params['day'] = day_filter
+    query_suffix = f"&{urlencode(query_params)}" if query_params else ''
+
+    summer_count = FlightRequest.objects.filter(season='summer').count()
+    winter_count = FlightRequest.objects.filter(season='winter').count()
+
+    context = {
+        'flight_rows': flights_data,
+        'season_filter': season_filter,
+        'airline_filter': int(airline_filter) if airline_filter.isdigit() else airline_filter,
+        'aircraft_filter': int(aircraft_filter) if aircraft_filter.isdigit() else aircraft_filter,
+        'day_filter': day_filter,
+        'query_suffix': query_suffix,
+        'airlines': Airline.objects.all().order_by('name'),
+        'aircraft_types': AircraftType.objects.all().order_by('code'),
+        'day_options': [
+            ('sunday', 'Sunday'),
+            ('monday', 'Monday'),
+            ('tuesday', 'Tuesday'),
+            ('wednesday', 'Wednesday'),
+            ('thursday', 'Thursday'),
+            ('friday', 'Friday'),
+            ('saturday', 'Saturday'),
+        ],
+        'day_headers': ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'],
+        'summer_count': summer_count,
+        'winter_count': winter_count,
+        'total_count': summer_count + winter_count,
+        'active_page': 'flights',
+    }
+    return render(request, 'flights/index.html', context)
+
+
+def flight_new(request):
+    airlines = Airline.objects.all().order_by('name')
+    aircraft_types = AircraftType.objects.all().order_by('code')
+    airports = Airport.objects.all().order_by('iata_code')
+    summer_start_2026, summer_end_2026 = get_summer_dates(2026)
+    winter_start_2025, winter_end_2025 = get_winter_dates(2025)
+
+    context = {
+        'airlines': airlines,
+        'aircraft_types': aircraft_types,
+        'airports': airports,
+        'current_year': date.today().year,
+        'summer_start': summer_start_2026,
+        'summer_end': summer_end_2026,
+        'winter_start': winter_start_2025,
+        'winter_end': winter_end_2025,
+        'active_page': 'flights',
+        'form_action': 'new',
+        'days': ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+    }
+    return render(request, 'flights/form.html', context)
+
+
+def flight_create(request):
+    if request.method != 'POST':
+        return redirect('flight_new')
+
+    try:
+        airline = get_object_or_404(Airline, id=request.POST.get('airline_id'))
+        aircraft_type = get_object_or_404(AircraftType, id=request.POST.get('aircraft_type_id'))
+
+        origin_id = request.POST.get('origin_id')
+        destination_id = request.POST.get('destination_id')
+        origin = Airport.objects.filter(id=origin_id).first() if origin_id else None
+        destination = Airport.objects.filter(id=destination_id).first() if destination_id else None
+
+        # Days of operation bitmask
+        day_names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+        days_mask = 0
+        for day in day_names:
+            if request.POST.get(f'day_{day}'):
+                days_mask |= DAY_MASK[day]
+
+        # Partial season dates
+        valid_from_str = request.POST.get('valid_from')
+        valid_to_str = request.POST.get('valid_to')
+        valid_from = datetime.strptime(valid_from_str, '%Y-%m-%d').date() if valid_from_str else None
+        valid_to = datetime.strptime(valid_to_str, '%Y-%m-%d').date() if valid_to_str else None
+
+        arrival_time_str = request.POST.get('arrival_time')
+        departure_time_str = request.POST.get('departure_time')
+        arrival_time = datetime.strptime(arrival_time_str, '%H:%M').time() if arrival_time_str else None
+        departure_time = datetime.strptime(departure_time_str, '%H:%M').time() if departure_time_str else None
+
+        flight = FlightRequest.objects.create(
+            airline=airline,
+            arrival_flight_number=request.POST.get('arrival_flight_number', '').strip(),
+            departure_flight_number=request.POST.get('departure_flight_number', '').strip(),
+            aircraft_type=aircraft_type,
+            operation_type=request.POST.get('operation_type', 'turnaround'),
+            season=request.POST.get('season', 'summer'),
+            year=int(request.POST.get('year', date.today().year)),
+            arrival_time=arrival_time,
+            departure_time=departure_time,
+            origin=origin,
+            destination=destination,
+            valid_from=valid_from,
+            valid_to=valid_to,
+            days_of_operation=days_mask,
+            notes=request.POST.get('notes', ''),
+        )
+        messages.success(request, f'Flight request created successfully.')
+        return redirect('flights_list')
+
+    except Exception as e:
+        messages.error(request, f'Error creating flight request: {str(e)}')
+        return redirect('flight_new')
+
+
+def flight_edit(request, pk):
+    flight = get_object_or_404(FlightRequest, pk=pk)
+    airlines = Airline.objects.all().order_by('name')
+    aircraft_types = AircraftType.objects.all().order_by('code')
+    airports = Airport.objects.all().order_by('iata_code')
+    summer_start_2026, summer_end_2026 = get_summer_dates(2026)
+    winter_start_2025, winter_end_2025 = get_winter_dates(2025)
+
+    context = {
+        'flight': flight,
+        'airlines': airlines,
+        'aircraft_types': aircraft_types,
+        'airports': airports,
+        'current_year': flight.year,
+        'summer_start': summer_start_2026,
+        'summer_end': summer_end_2026,
+        'winter_start': winter_start_2025,
+        'winter_end': winter_end_2025,
+        'active_page': 'flights',
+        'form_action': 'edit',
+        'days': ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+        'day_mask': flight.days_of_operation,
+        'day_mask_map': DAY_MASK,
+        'next_url': request.GET.get('next', ''),
+    }
+    return render(request, 'flights/form.html', context)
+
+
+def flight_update(request, pk):
+    if request.method != 'POST':
+        return redirect('flight_edit', pk=pk)
+    flight = get_object_or_404(FlightRequest, pk=pk)
+
+    try:
+        airline = get_object_or_404(Airline, id=request.POST.get('airline_id'))
+        aircraft_type = get_object_or_404(AircraftType, id=request.POST.get('aircraft_type_id'))
+
+        origin_id = request.POST.get('origin_id')
+        destination_id = request.POST.get('destination_id')
+        origin = Airport.objects.filter(id=origin_id).first() if origin_id else None
+        destination = Airport.objects.filter(id=destination_id).first() if destination_id else None
+
+        day_names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+        days_mask = 0
+        for day in day_names:
+            if request.POST.get(f'day_{day}'):
+                days_mask |= DAY_MASK[day]
+
+        valid_from_str = request.POST.get('valid_from')
+        valid_to_str = request.POST.get('valid_to')
+        valid_from = datetime.strptime(valid_from_str, '%Y-%m-%d').date() if valid_from_str else None
+        valid_to = datetime.strptime(valid_to_str, '%Y-%m-%d').date() if valid_to_str else None
+
+        arrival_time_str = request.POST.get('arrival_time')
+        departure_time_str = request.POST.get('departure_time')
+        arrival_time = datetime.strptime(arrival_time_str, '%H:%M').time() if arrival_time_str else None
+        departure_time = datetime.strptime(departure_time_str, '%H:%M').time() if departure_time_str else None
+
+        flight.airline = airline
+        flight.arrival_flight_number = request.POST.get('arrival_flight_number', '').strip()
+        flight.departure_flight_number = request.POST.get('departure_flight_number', '').strip()
+        flight.aircraft_type = aircraft_type
+        flight.operation_type = request.POST.get('operation_type', 'turnaround')
+        flight.season = request.POST.get('season', 'summer')
+        flight.year = int(request.POST.get('year', date.today().year))
+        flight.arrival_time = arrival_time
+        flight.departure_time = departure_time
+        flight.origin = origin
+        flight.destination = destination
+        flight.valid_from = valid_from
+        flight.valid_to = valid_to
+        flight.days_of_operation = days_mask
+        flight.notes = request.POST.get('notes', '')
+        flight.status = 'pending'  # reset status when edited
+        flight.save()
+
+        # Clear old allocations
+        StandAllocation.objects.filter(flight_request=flight).delete()
+        GateAllocation.objects.filter(flight_request=flight).delete()
+        CheckInAllocation.objects.filter(flight_request=flight).delete()
+
+        messages.success(request, 'Flight request updated successfully.')
+        return _redirect_to_next_or_default(request, 'flights_list')
+
+    except Exception as e:
+        messages.error(request, f'Error updating flight request: {str(e)}')
+        return redirect('flight_edit', pk=pk)
+
+
+@require_POST
+def flight_delete(request, pk):
+    flight = get_object_or_404(FlightRequest, pk=pk)
+    flight_str = str(flight)
+    flight.delete()
+    messages.success(request, f'Flight request deleted.')
+    return _redirect_to_next_or_default(request, 'flights_list')
+
+
+@require_POST
+def flight_approve(request, pk):
+    flight = get_object_or_404(FlightRequest, pk=pk)
+    flight.status = 'allocated'
+    flight.save(update_fields=['status', 'updated_at'])
+    messages.success(request, f'Flight request {flight} approved.')
+    return _redirect_to_next_or_default(request, 'flights_list')
+
+
+@require_POST
+def flight_reject(request, pk):
+    flight = get_object_or_404(FlightRequest, pk=pk)
+    flight.status = 'cancelled'
+    flight.save(update_fields=['status', 'updated_at'])
+    StandAllocation.objects.filter(flight_request=flight).delete()
+    GateAllocation.objects.filter(flight_request=flight).delete()
+    CheckInAllocation.objects.filter(flight_request=flight).delete()
+    messages.info(request, f'Flight request {flight} rejected.')
+    return _redirect_to_next_or_default(request, 'flights_list')
+
+
+# ─── Daily Schedule ───────────────────────────────────────────────────────────
+
+def schedule_view(request):
+    date_str = request.GET.get('date', date.today().strftime('%Y-%m-%d'))
+    try:
+        selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        selected_date = date.today()
+
+    from core.services.season import get_season_for_date, is_date_in_season
+    season, year = get_season_for_date(selected_date)
+
+    # Get all flight requests for this season
+    all_requests = FlightRequest.objects.filter(
+        season=season, year=year
+    ).select_related('airline', 'aircraft_type', 'origin', 'destination')
+
+    # Filter to those that operate on this specific date
+    daily_flights = [f for f in all_requests if f.operates_on_date(selected_date)]
+
+    # Get allocations for this date
+    stand_allocs = {
+        sa.flight_request_id: sa
+        for sa in StandAllocation.objects.filter(date=selected_date).select_related('stand')
+    }
+    gate_allocs = {
+        ga.flight_request_id: ga
+        for ga in GateAllocation.objects.filter(date=selected_date).select_related('gate')
+    }
+    checkin_allocs = {
+        ca.flight_request_id: ca
+        for ca in CheckInAllocation.objects.filter(date=selected_date)
+    }
+
+    # Build display rows
+    flight_rows = []
+    for f in sorted(daily_flights, key=lambda x: x.arrival_time or x.departure_time or datetime.min.time()):
+        flight_rows.append({
+            'flight': f,
+            'stand': stand_allocs.get(f.id),
+            'gate': gate_allocs.get(f.id),
+            'checkin': checkin_allocs.get(f.id),
+            'allocated': f.id in stand_allocs or f.id in gate_allocs or f.id in checkin_allocs,
+        })
+
+    allocated_count = sum(1 for r in flight_rows if r['allocated'])
+    conflict_count = sum(1 for r in flight_rows if r['flight'].status == 'conflict')
+
+    context = {
+        'selected_date': selected_date,
+        'date_str': date_str,
+        'schedule_return_url': f'/schedule/?date={date_str}',
+        'flight_rows': flight_rows,
+        'total_flights': len(flight_rows),
+        'allocated_count': allocated_count,
+        'conflict_count': conflict_count,
+        'active_page': 'schedule',
+    }
+    return render(request, 'schedule.html', context)
+
+
+@require_POST
+def schedule_allocate(request):
+    date_str = request.POST.get('date', date.today().strftime('%Y-%m-%d'))
+    try:
+        alloc_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        alloc_date = date.today()
+
+    results = allocate_resources_for_date(alloc_date)
+    messages.success(
+        request,
+        f"Allocation complete: {results['allocated']} allocated, "
+        f"{results['conflicts']} conflicts, {results['skipped']} skipped."
+    )
+    return redirect(f'/schedule/?date={date_str}')
+
+
+@require_POST
+def schedule_clear(request):
+    """Clear all allocations for a specific date."""
+    date_str = request.POST.get('date', date.today().strftime('%Y-%m-%d'))
+    try:
+        clear_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        clear_date = date.today()
+
+    # Collect affected flight IDs before deleting
+    affected_ids = set(
+        StandAllocation.objects.filter(date=clear_date).values_list('flight_request_id', flat=True)
+    ) | set(
+        GateAllocation.objects.filter(date=clear_date).values_list('flight_request_id', flat=True)
+    ) | set(
+        CheckInAllocation.objects.filter(date=clear_date).values_list('flight_request_id', flat=True)
+    )
+
+    StandAllocation.objects.filter(date=clear_date).delete()
+    GateAllocation.objects.filter(date=clear_date).delete()
+    CheckInAllocation.objects.filter(date=clear_date).delete()
+
+    # Only reset status for flights with NO remaining allocations on any other date
+    for fid in affected_ids:
+        if not StandAllocation.objects.filter(flight_request_id=fid).exists():
+            FlightRequest.objects.filter(id=fid, status='allocated').update(status='pending')
+
+    messages.info(request, f"All allocations for {clear_date.strftime('%d/%m/%Y')} cleared.")
+    return redirect(f'/schedule/?date={date_str}')
+
+
+def schedule_allocate_manual(request, flight_id):
+    """Show available resources for manual allocation."""
+    from core.services.allocation import (
+        get_allocated_stands_on_date, get_allocated_gates_on_date,
+        time_subtract_minutes, times_overlap, time_add_minutes
+    )
+    
+    flight = get_object_or_404(FlightRequest, pk=flight_id)
+    date_str = request.GET.get('date', date.today().strftime('%Y-%m-%d'))
+    try:
+        selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        selected_date = date.today()
+    
+    if not flight.operates_on_date(selected_date):
+        messages.error(request, 'Flight does not operate on selected date.')
+        return redirect(f'/schedule/?date={date_str}')
+    
+    arrival = flight.arrival_time or flight.departure_time
+    departure = flight.departure_time or flight.arrival_time
+    
+    # Get available stands
+    existing_stands = get_allocated_stands_on_date(selected_date)
+    all_stands = ParkingStand.objects.filter(
+        is_active=True, parent_stand__isnull=True
+    ).filter(Q(size_code__in=['D', 'E', 'F']) | Q(size_code__lte=flight.aircraft_type.size_code))
+    
+    available_stands = []
+    for stand in all_stands:
+        if stand.can_accommodate(flight.aircraft_type):
+            conflict = False
+            for (sid, sstart, send) in existing_stands:
+                if sid == stand.id and times_overlap(arrival, departure, sstart, send):
+                    conflict = True
+                    break
+            if not conflict:
+                available_stands.append(stand)
+    
+    # Get available gates (only for non-arrival flights)
+    available_gates = []
+    if flight.operation_type != 'arrival':
+        departure_time = flight.departure_time
+        gate_close = time_subtract_minutes(departure_time, 15)
+        gate_open = time_subtract_minutes(departure_time, 45)
+        
+        existing_gates = get_allocated_gates_on_date(selected_date)
+        all_gates = Gate.objects.filter(is_active=True)
+        
+        for gate in all_gates:
+            conflict = False
+            for (gid, gstart, gend) in existing_gates:
+                if gid == gate.id and times_overlap(gate_open, gate_close, gstart, gend):
+                    conflict = True
+                    break
+            if not conflict:
+                available_gates.append(gate)
+    
+    # Get available counters (only for non-arrival flights)
+    available_counters = []
+    if flight.operation_type != 'arrival':
+        departure_time = flight.departure_time
+        checkin_close = time_subtract_minutes(departure_time, 60)
+        checkin_open = time_subtract_minutes(checkin_close, flight.checkin_duration_hours * 60)
+        
+        existing_allocs = list(CheckInAllocation.objects.filter(date=selected_date))
+        num_needed = flight.min_counters
+        
+        # Find contiguous free counter ranges
+        for start in range(1, 24 - num_needed):
+            end = start + num_needed - 1
+            block_free = True
+            for alloc in existing_allocs:
+                for c in range(start, end + 1):
+                    if alloc.counter_from <= c <= alloc.counter_to:
+                        if times_overlap(checkin_open, checkin_close, alloc.start_time, alloc.end_time):
+                            block_free = False
+                            break
+                if not block_free:
+                    break
+            if block_free:
+                available_counters.append((start, end))
+    
+    context = {
+        'flight': flight,
+        'date_str': date_str,
+        'selected_date': selected_date,
+        'available_stands': available_stands,
+        'available_gates': available_gates,
+        'available_counters': available_counters,
+    }
+    return render(request, 'schedule_allocate_manual.html', context)
+
+
+@require_POST
+def schedule_allocate_manual_submit(request, flight_id):
+    """Process manual resource allocation."""
+    flight = get_object_or_404(FlightRequest, pk=flight_id)
+    date_str = request.POST.get('date', date.today().strftime('%Y-%m-%d'))
+    try:
+        selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        selected_date = date.today()
+    
+    stand_id = request.POST.get('stand_id')
+    gate_id = request.POST.get('gate_id')
+    counter_range = request.POST.get('counter_range')
+    
+    try:
+        # Allocate stand
+        if stand_id:
+            stand = get_object_or_404(ParkingStand, pk=stand_id)
+            arrival = flight.arrival_time or flight.departure_time
+            departure = flight.departure_time or flight.arrival_time
+            StandAllocation.objects.update_or_create(
+                flight_request=flight,
+                date=selected_date,
+                defaults={
+                    'stand': stand,
+                    'start_time': arrival,
+                    'end_time': departure,
+                }
+            )
+        
+        # Allocate gate
+        if gate_id and flight.operation_type != 'arrival':
+            gate = get_object_or_404(Gate, pk=gate_id)
+            departure_time = flight.departure_time
+            gate_close = time_subtract_minutes(departure_time, 15)
+            gate_open = time_subtract_minutes(departure_time, 45)
+            GateAllocation.objects.update_or_create(
+                flight_request=flight,
+                date=selected_date,
+                defaults={
+                    'gate': gate,
+                    'start_time': gate_open,
+                    'end_time': gate_close,
+                }
+            )
+        
+        # Allocate check-in counters
+        if counter_range and flight.operation_type != 'arrival':
+            counter_from, counter_to = map(int, counter_range.split('-'))
+            departure_time = flight.departure_time
+            checkin_close = time_subtract_minutes(departure_time, 60)
+            checkin_open = time_subtract_minutes(checkin_close, flight.checkin_duration_hours * 60)
+            CheckInAllocation.objects.update_or_create(
+                flight_request=flight,
+                date=selected_date,
+                defaults={
+                    'counter_from': counter_from,
+                    'counter_to': counter_to,
+                    'start_time': checkin_open,
+                    'end_time': checkin_close,
+                }
+            )
+        
+        flight.status = 'allocated'
+        flight.save(update_fields=['status', 'updated_at'])
+        messages.success(request, f'Resources allocated for {flight}.')
+    except Exception as e:
+        messages.error(request, f'Error allocating resources: {str(e)}')
+    
+    return redirect(f'/schedule/?date={date_str}')
+
+
+
+
+# ─── Season Resource Allocation ────────────────────────────────────────────────
+
+def season_allocations_view(request):
+    """
+    Show all flights for a season with their resource allocations.
+    Allow bulk assignment by airline and check for conflicts.
+    """
+    from core.services.season import get_current_season
+    
+    season_filter = request.GET.get('season', 'all')
+    airline_filter = request.GET.get('airline', '').strip()
+    
+    season_name, year, season_start, season_end = get_current_season()
+    
+    # Get flights for the season
+    qs = FlightRequest.objects.select_related('airline', 'aircraft_type', 'origin', 'destination')
+    
+    if season_filter in ('summer', 'winter'):
+        qs = qs.filter(season=season_filter)
+    else:
+        # Get both summer and winter
+        qs = qs.filter(year=year)
+    
+    if airline_filter.isdigit():
+        qs = qs.filter(airline_id=int(airline_filter))
+    
+    qs = qs.order_by('airline__name', 'arrival_time', 'departure_time')
+    
+    # Build flight rows with allocations
+    flight_rows = []
+    for flight in qs:
+        # Get the most common allocation (season-level)
+        stand_allocs = StandAllocation.objects.filter(flight_request=flight).values('stand_id').annotate(
+            count=Count('id')
+        ).order_by('-count').first()
+        
+        gate_allocs = GateAllocation.objects.filter(flight_request=flight).values('gate_id').annotate(
+            count=Count('id')
+        ).order_by('-count').first()
+        
+        checkin_allocs = CheckInAllocation.objects.filter(flight_request=flight).values(
+            'counter_from', 'counter_to'
+        ).annotate(
+            count=Count('id')
+        ).order_by('-count').first()
+        
+        # Check for conflicts on any date
+        has_conflict = FlightRequest.objects.filter(id=flight.id, status='conflict').exists()
+        
+        stand = None
+        gate = None
+        checkin = None
+        
+        if stand_allocs:
+            try:
+                stand = ParkingStand.objects.get(id=stand_allocs['stand_id'])
+            except:
+                pass
+        
+        if gate_allocs:
+            try:
+                gate = Gate.objects.get(id=gate_allocs['gate_id'])
+            except:
+                pass
+        
+        if checkin_allocs:
+            checkin = f"C{checkin_allocs['counter_from']}–{checkin_allocs['counter_to']}"
+        
+        flight_rows.append({
+            'flight': flight,
+            'stand': stand,
+            'gate': gate,
+            'checkin': checkin,
+            'has_conflict': has_conflict,
+            'allocated': stand or gate or checkin,
+        })
+    
+    # Get counts by season
+    summer_count = FlightRequest.objects.filter(season='summer', year=year).count()
+    winter_count = FlightRequest.objects.filter(season='winter', year=year).count()
+    
+    # Get all available stands and gates for dropdown
+    all_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True).order_by('stand_number')
+    all_gates = Gate.objects.filter(is_active=True).order_by('gate_number')
+    
+    context = {
+        'flight_rows': flight_rows,
+        'season_filter': season_filter,
+        'airline_filter': int(airline_filter) if airline_filter.isdigit() else airline_filter,
+        'airlines': Airline.objects.all().order_by('name'),
+        'summer_count': summer_count,
+        'winter_count': winter_count,
+        'total_count': summer_count + winter_count,
+        'current_season': season_name,
+        'current_year': year,
+        'season_start': season_start,
+        'season_end': season_end,
+        'active_page': 'allocations',
+    }
+    return render(request, 'allocations.html', context)
+
+
+def flight_allocate_season(request, flight_id):
+    """
+    Show detailed allocation page for a single flight across the entire season.
+    """
+    flight = get_object_or_404(FlightRequest.objects.select_related('airline', 'aircraft_type', 'origin', 'destination'), pk=flight_id)
+    from core.services.season import get_season_dates
+    
+    # Get season dates
+    if flight.season == 'summer':
+        season_start, season_end = get_season_dates('summer', flight.year)
+    else:
+        season_start, season_end = get_season_dates('winter', flight.year)
+    
+    # Get current allocations
+    stand_allocs = StandAllocation.objects.filter(flight_request=flight).select_related('stand')
+    gate_allocs = GateAllocation.objects.filter(flight_request=flight).select_related('gate')
+    checkin_allocs = CheckInAllocation.objects.filter(flight_request=flight)
+    
+    # Build allocation map by date
+    stand_map = {alloc.date: alloc.stand for alloc in stand_allocs}
+    gate_map = {alloc.date: alloc.gate for alloc in gate_allocs}
+    checkin_map = {alloc.date: f"{alloc.counter_from}-{alloc.counter_to}" for alloc in checkin_allocs}
+    
+    # Get all available resources
+    all_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True).order_by('apron', 'stand_number')
+    all_gates = Gate.objects.filter(is_active=True).order_by('gate_number')
+    
+    # Organize stands by apron
+    apron1_stands = all_stands.filter(apron='apron1')
+    apron1ext_stands = all_stands.filter(apron='apron1ext')
+    
+    # Get operating dates
+    operating_dates = []
+    current_date = season_start
+    while current_date <= season_end:
+        if flight.operates_on_date(current_date):
+            operating_dates.append(current_date)
+        current_date += timedelta(days=1)
+    
+    days_count = len(operating_dates)
+    
+    context = {
+        'flight': flight,
+        'season_start': season_start,
+        'season_end': season_end,
+        'operating_dates': operating_dates,
+        'days_count': days_count,
+        'stand_map': stand_map,
+        'gate_map': gate_map,
+        'checkin_map': checkin_map,
+        'apron1_stands': apron1_stands,
+        'apron1ext_stands': apron1ext_stands,
+        'all_gates': all_gates,
+        'active_page': 'allocations',
+        'season_filter': request.GET.get('season', flight.season),
+    }
+    return render(request, 'flight_allocate_season.html', context)
+
+
+@require_POST
+def flight_allocate_season_submit(request, flight_id):
+    """
+    Save resource allocations for a flight across the entire season.
+    """
+    flight = get_object_or_404(FlightRequest, pk=flight_id)
+    from core.services.season import get_season_dates
+    from core.services.allocation import time_subtract_minutes, time_add_minutes
+    
+    stand_id = request.POST.get('stand_id')
+    gate_id = request.POST.get('gate_id')
+    counter_from = request.POST.get('counter_from')
+    counter_to = request.POST.get('counter_to')
+    season_filter = request.POST.get('season', flight.season)
+    
+    # Convert to integers
+    try:
+        stand_id = int(stand_id) if stand_id and stand_id.strip() and stand_id != '' else None
+    except ValueError:
+        stand_id = None
+    
+    try:
+        gate_id = int(gate_id) if gate_id and gate_id.strip() and gate_id != '' else None
+    except ValueError:
+        gate_id = None
+    
+    try:
+        counter_from = int(counter_from) if counter_from and counter_from.strip() else None
+        counter_to = int(counter_to) if counter_to and counter_to.strip() else None
+    except ValueError:
+        counter_from = None
+        counter_to = None
+    
+    # Get season dates
+    if flight.season == 'summer':
+        season_start, season_end = get_season_dates('summer', flight.year)
+    else:
+        season_start, season_end = get_season_dates('winter', flight.year)
+    
+    try:
+        resource_assigned = False
+        
+        # Assign stand for all operating dates
+        if stand_id:
+            stand = ParkingStand.objects.get(id=stand_id)
+            current_date = season_start
+            while current_date <= season_end:
+                if flight.operates_on_date(current_date):
+                    arrival = flight.arrival_time or flight.departure_time
+                    departure = flight.departure_time or flight.arrival_time
+                    if arrival and departure:
+                        StandAllocation.objects.update_or_create(
+                            flight_request=flight,
+                            date=current_date,
+                            defaults={
+                                'stand': stand,
+                                'start_time': arrival,
+                                'end_time': departure,
+                            }
+                        )
+                        resource_assigned = True
+                current_date += timedelta(days=1)
+        
+        # Assign gate for all operating dates
+        if gate_id and flight.operation_type != 'arrival':
+            gate = Gate.objects.get(id=gate_id)
+            current_date = season_start
+            while current_date <= season_end:
+                if flight.operates_on_date(current_date):
+                    departure_time = flight.departure_time
+                    if departure_time:
+                        gate_close = time_subtract_minutes(departure_time, 15)
+                        gate_open = time_subtract_minutes(departure_time, 45)
+                        GateAllocation.objects.update_or_create(
+                            flight_request=flight,
+                            date=current_date,
+                            defaults={
+                                'gate': gate,
+                                'start_time': gate_open,
+                                'end_time': gate_close,
+                            }
+                        )
+                        resource_assigned = True
+                current_date += timedelta(days=1)
+        
+        # Assign check-in counters for all operating dates
+        if counter_from and counter_to and flight.operation_type != 'arrival':
+            current_date = season_start
+            while current_date <= season_end:
+                if flight.operates_on_date(current_date):
+                    departure_time = flight.departure_time
+                    if departure_time:
+                        checkin_close = time_subtract_minutes(departure_time, 40)
+                        checkin_open = time_subtract_minutes(departure_time, 180)
+                        CheckInAllocation.objects.update_or_create(
+                            flight_request=flight,
+                            date=current_date,
+                            defaults={
+                                'counter_from': counter_from,
+                                'counter_to': counter_to,
+                                'start_time': checkin_open,
+                                'end_time': checkin_close,
+                            }
+                        )
+                        resource_assigned = True
+                current_date += timedelta(days=1)
+        
+        # Update flight status
+        if resource_assigned:
+            flight.status = 'allocated'
+            flight.save()
+            messages.success(request, f'Resources assigned to {flight.arrival_flight_number or flight.departure_flight_number} for entire season.')
+        else:
+            messages.warning(request, 'No resources were assigned.')
+    
+    except Exception as e:
+        messages.error(request, f'Error assigning resources: {str(e)}')
+    
+    return redirect(f'/allocations/?season={season_filter}')
+
+
+@require_POST
+def season_allocations_auto(request):
+    """
+    Auto-allocate resources to selected flights using the allocation service.
+    """
+    flight_ids = request.POST.getlist('flight_ids')
+    season_filter = request.POST.get('season', 'summer')
+    
+    if not flight_ids:
+        messages.warning(request, 'No flights selected.')
+        return redirect(f'/allocations/?season={season_filter}')
+    
+    from core.services.allocation import allocate_stand, allocate_gate, allocate_checkin
+    from core.services.season import get_season_dates
+    
+    success_count = 0
+    error_count = 0
+    
+    for flight_id in flight_ids:
+        try:
+            flight = FlightRequest.objects.get(id=flight_id)
+            
+            # Get season dates
+            if flight.season == 'summer':
+                season_start, season_end = get_season_dates('summer', flight.year)
+            else:
+                season_start, season_end = get_season_dates('winter', flight.year)
+            
+            # Allocate for each operating date
+            current_date = season_start
+            date_success = False
+            
+            while current_date <= season_end:
+                if flight.operates_on_date(current_date):
+                    # Try to allocate resources for this date
+                    stand_allocated = allocate_stand(flight, current_date)
+                    gate_allocated = allocate_gate(flight, current_date)
+                    checkin_allocated = allocate_checkin(flight, current_date)
+                    
+                    if stand_allocated or gate_allocated or checkin_allocated:
+                        date_success = True
+                
+                current_date += timedelta(days=1)
+            
+            if date_success:
+                flight.status = 'allocated'
+                flight.save()
+                success_count += 1
+            else:
+                error_count += 1
+        
+        except Exception as e:
+            error_count += 1
+            continue
+    
+    if success_count > 0:
+        messages.success(request, f'Auto-allocated resources to {success_count} flight(s).')
+    if error_count > 0:
+        messages.warning(request, f'Failed to allocate {error_count} flight(s). Resources may be unavailable.')
+    
+    return redirect(f'/allocations/?season={season_filter}')
+
+
+@require_POST
+def season_allocations_assign(request):
+    """
+    Assign resources to flights (bulk operation by airline or individual flights).
+    """
+    flight_ids = request.POST.getlist('flight_ids')
+    stand_id = request.POST.get('stand_id')
+    gate_id = request.POST.get('gate_id')
+    counter_range = request.POST.get('counter_range')
+    season_filter = request.POST.get('season', 'summer')
+    
+    # Convert IDs to integers (handle empty strings from "No Assignment" options)
+    try:
+        stand_id = int(stand_id) if stand_id and stand_id.strip() else None
+    except ValueError:
+        stand_id = None
+    
+    try:
+        gate_id = int(gate_id) if gate_id and gate_id.strip() else None
+    except ValueError:
+        gate_id = None
+    
+    if not flight_ids:
+        messages.warning(request, 'No flights selected.')
+        return redirect(f'/allocations/?season={season_filter}')
+    
+    try:
+        assigned_count = 0
+        
+        for flight_id in flight_ids:
+            try:
+                flight = FlightRequest.objects.get(id=flight_id)
+            except:
+                continue
+            
+            resource_assigned = False
+            
+            # Assign stand (apply to all dates where flight operates)
+            if stand_id:
+                try:
+                    stand = ParkingStand.objects.get(id=stand_id)
+                    from core.services.season import get_season_dates
+                    
+                    if flight.season == 'summer':
+                        season_start, season_end = get_season_dates('summer', flight.year)
+                    else:
+                        season_start, season_end = get_season_dates('winter', flight.year)
+                    
+                    # Create allocation for each date the flight operates
+                    current_date = season_start
+                    while current_date <= season_end:
+                        if flight.operates_on_date(current_date):
+                            arrival = flight.arrival_time or flight.departure_time
+                            departure = flight.departure_time or flight.arrival_time
+                            if arrival and departure:
+                                StandAllocation.objects.update_or_create(
+                                    flight_request=flight,
+                                    date=current_date,
+                                    defaults={
+                                        'stand': stand,
+                                        'start_time': arrival,
+                                        'end_time': departure,
+                                    }
+                                )
+                                resource_assigned = True
+                        current_date += timedelta(days=1)
+                except Exception as e:
+                    messages.warning(request, f'Error assigning stand: {str(e)}')
+            
+            # Assign gate (apply to all dates where flight operates)
+            if gate_id and flight.operation_type != 'arrival':
+                try:
+                    gate = Gate.objects.get(id=gate_id)
+                    from core.services.season import get_season_dates
+                    
+                    if flight.season == 'summer':
+                        season_start, season_end = get_season_dates('summer', flight.year)
+                    else:
+                        season_start, season_end = get_season_dates('winter', flight.year)
+                    
+                    current_date = season_start
+                    while current_date <= season_end:
+                        if flight.operates_on_date(current_date):
+                            departure_time = flight.departure_time
+                            if departure_time:
+                                gate_close = time_subtract_minutes(departure_time, 15)
+                                gate_open = time_subtract_minutes(departure_time, 45)
+                                GateAllocation.objects.update_or_create(
+                                    flight_request=flight,
+                                    date=current_date,
+                                    defaults={
+                                        'gate': gate,
+                                        'start_time': gate_open,
+                                        'end_time': gate_close,
+                                    }
+                                )
+                                resource_assigned = True
+                        current_date += timedelta(days=1)
+                except Exception as e:
+                    messages.warning(request, f'Error assigning gate: {str(e)}')
+            
+            # Assign check-in counters (apply to all dates where flight operates)
+            if counter_range and flight.operation_type != 'arrival':
+                try:
+                    counter_from, counter_to = map(int, counter_range.split('-'))
+                    from core.services.season import get_season_dates
+                    
+                    if flight.season == 'summer':
+                        season_start, season_end = get_season_dates('summer', flight.year)
+                    else:
+                        season_start, season_end = get_season_dates('winter', flight.year)
+                    
+                    current_date = season_start
+                    while current_date <= season_end:
+                        if flight.operates_on_date(current_date):
+                            departure_time = flight.departure_time
+                            if departure_time:
+                                checkin_close = time_subtract_minutes(departure_time, 60)
+                                checkin_open = time_subtract_minutes(checkin_close, flight.checkin_duration_hours * 60)
+                                CheckInAllocation.objects.update_or_create(
+                                    flight_request=flight,
+                                    date=current_date,
+                                    defaults={
+                                        'counter_from': counter_from,
+                                        'counter_to': counter_to,
+                                        'start_time': checkin_open,
+                                        'end_time': checkin_close,
+                                    }
+                                )
+                                resource_assigned = True
+                        current_date += timedelta(days=1)
+                except Exception as e:
+                    messages.warning(request, f'Error assigning counters: {str(e)}')
+            
+            # Update flight status if any resource was assigned
+            if resource_assigned:
+                flight.status = 'allocated'
+                flight.save(update_fields=['status', 'updated_at'])
+                assigned_count += 1
+        
+        messages.success(request, f'Resources assigned to {assigned_count} flight(s).')
+    except Exception as e:
+        messages.error(request, f'Error during bulk assignment: {str(e)}')
+    
+    return redirect(f'/allocations/?season={season_filter}')
+
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+
+def resources_view(request):
+    apron1_stands = ParkingStand.objects.filter(apron='apron1', parent_stand__isnull=True, is_active=True).prefetch_related('sub_stands', 'gates')
+    apron1ext_stands = ParkingStand.objects.filter(apron='apron1ext', is_active=True)
+    gates = Gate.objects.filter(is_active=True).select_related('connected_stand')
+    counters = CheckInCounter.objects.filter(is_active=True)
+
+    context = {
+        'apron1_stands': apron1_stands,
+        'apron1ext_stands': apron1ext_stands,
+        'gates': gates,
+        'counters': counters,
+        'counter_total': counters.count(),
+        'dedicated_counters': counters.filter(is_dedicated_home_airline=True),
+        'common_counters': counters.filter(is_dedicated_home_airline=False),
+        'active_page': 'resources',
+    }
+    return render(request, 'resources.html', context)
+
+
+# ─── Reference Data Management ────────────────────────────────────────────────
+
+# Airlines Management
+def airlines_list(request):
+    airlines = Airline.objects.all().order_by('name')
+    context = {
+        'airlines': airlines,
+        'active_page': 'airlines',
+    }
+    return render(request, 'admin/airlines_list.html', context)
+
+
+def airline_new(request):
+    context = {
+        'active_page': 'airlines',
+        'form_action': 'new',
+    }
+    return render(request, 'admin/airline_form.html', context)
+
+
+def airline_create(request):
+    if request.method != 'POST':
+        return redirect('airlines_list')
+    
+    try:
+        Airline.objects.create(
+            iata_code=request.POST.get('iata_code', '').strip().upper(),
+            icao_code=request.POST.get('icao_code', '').strip().upper(),
+            name=request.POST.get('name', '').strip(),
+            is_home_airline=request.POST.get('is_home_airline') == 'on',
+        )
+        messages.success(request, 'Airline added successfully.')
+        return redirect('airlines_list')
+    except Exception as e:
+        messages.error(request, f'Error adding airline: {str(e)}')
+        return redirect('airline_new')
+
+
+def airline_edit(request, pk):
+    airline = get_object_or_404(Airline, pk=pk)
+    context = {
+        'airline': airline,
+        'active_page': 'airlines',
+        'form_action': 'edit',
+    }
+    return render(request, 'admin/airline_form.html', context)
+
+
+def airline_update(request, pk):
+    if request.method != 'POST':
+        return redirect('airline_edit', pk=pk)
+    
+    airline = get_object_or_404(Airline, pk=pk)
+    try:
+        airline.iata_code = request.POST.get('iata_code', '').strip().upper()
+        airline.icao_code = request.POST.get('icao_code', '').strip().upper()
+        airline.name = request.POST.get('name', '').strip()
+        airline.is_home_airline = request.POST.get('is_home_airline') == 'on'
+        airline.save()
+        messages.success(request, 'Airline updated successfully.')
+        return redirect('airlines_list')
+    except Exception as e:
+        messages.error(request, f'Error updating airline: {str(e)}')
+        return redirect('airline_edit', pk=pk)
+
+
+@require_POST
+def airline_delete(request, pk):
+    airline = get_object_or_404(Airline, pk=pk)
+    airline.delete()
+    messages.success(request, 'Airline deleted.')
+    return redirect('airlines_list')
+
+
+# Airports Management
+def airports_list(request):
+    airports = Airport.objects.all().order_by('iata_code')
+    context = {
+        'airports': airports,
+        'active_page': 'airports',
+    }
+    return render(request, 'admin/airports_list.html', context)
+
+
+def airport_new(request):
+    context = {
+        'active_page': 'airports',
+        'form_action': 'new',
+    }
+    return render(request, 'admin/airport_form.html', context)
+
+
+def airport_create(request):
+    if request.method != 'POST':
+        return redirect('airports_list')
+    
+    try:
+        Airport.objects.create(
+            iata_code=request.POST.get('iata_code', '').strip().upper(),
+            icao_code=request.POST.get('icao_code', '').strip().upper() or None,
+            city_name=request.POST.get('city_name', '').strip(),
+            country=request.POST.get('country', '').strip(),
+        )
+        messages.success(request, 'Airport added successfully.')
+        return redirect('airports_list')
+    except Exception as e:
+        messages.error(request, f'Error adding airport: {str(e)}')
+        return redirect('airport_new')
+
+
+def airport_edit(request, pk):
+    airport = get_object_or_404(Airport, pk=pk)
+    context = {
+        'airport': airport,
+        'active_page': 'airports',
+        'form_action': 'edit',
+    }
+    return render(request, 'admin/airport_form.html', context)
+
+
+def airport_update(request, pk):
+    if request.method != 'POST':
+        return redirect('airport_edit', pk=pk)
+    
+    airport = get_object_or_404(Airport, pk=pk)
+    try:
+        airport.iata_code = request.POST.get('iata_code', '').strip().upper()
+        airport.icao_code = request.POST.get('icao_code', '').strip().upper() or None
+        airport.city_name = request.POST.get('city_name', '').strip()
+        airport.country = request.POST.get('country', '').strip()
+        airport.save()
+        messages.success(request, 'Airport updated successfully.')
+        return redirect('airports_list')
+    except Exception as e:
+        messages.error(request, f'Error updating airport: {str(e)}')
+        return redirect('airport_edit', pk=pk)
+
+
+@require_POST
+def airport_delete(request, pk):
+    airport = get_object_or_404(Airport, pk=pk)
+    airport.delete()
+    messages.success(request, 'Airport deleted.')
+    return redirect('airports_list')
+
+
+# Aircraft Types Management
+def aircraft_types_list(request):
+    aircraft_types = AircraftType.objects.all().order_by('code')
+    context = {
+        'aircraft_types': aircraft_types,
+        'active_page': 'aircraft_types',
+    }
+    return render(request, 'admin/aircraft_types_list.html', context)
+
+
+def aircraft_type_new(request):
+    context = {
+        'size_codes': ['A', 'B', 'C', 'D', 'E', 'F'],
+        'categories': ['wide_body', 'narrow_body', 'regional', 'turboprop'],
+        'active_page': 'aircraft_types',
+        'form_action': 'new',
+    }
+    return render(request, 'admin/aircraft_type_form.html', context)
+
+
+def aircraft_type_create(request):
+    if request.method != 'POST':
+        return redirect('aircraft_types_list')
+    
+    try:
+        AircraftType.objects.create(
+            code=request.POST.get('code', '').strip().upper(),
+            name=request.POST.get('name', '').strip(),
+            manufacturer=request.POST.get('manufacturer', '').strip(),
+            category=request.POST.get('category', ''),
+            size_code=request.POST.get('size_code', ''),
+            is_wide_body=request.POST.get('is_wide_body') == 'on',
+            pax_capacity=int(request.POST.get('pax_capacity', 0)) if request.POST.get('pax_capacity') else 0,
+        )
+        messages.success(request, 'Aircraft type added successfully.')
+        return redirect('aircraft_types_list')
+    except Exception as e:
+        messages.error(request, f'Error adding aircraft type: {str(e)}')
+        return redirect('aircraft_type_new')
+
+
+def aircraft_type_edit(request, pk):
+    aircraft_type = get_object_or_404(AircraftType, pk=pk)
+    context = {
+        'aircraft_type': aircraft_type,
+        'size_codes': ['A', 'B', 'C', 'D', 'E', 'F'],
+        'categories': ['wide_body', 'narrow_body', 'regional', 'turboprop'],
+        'active_page': 'aircraft_types',
+        'form_action': 'edit',
+    }
+    return render(request, 'admin/aircraft_type_form.html', context)
+
+
+def aircraft_type_update(request, pk):
+    if request.method != 'POST':
+        return redirect('aircraft_type_edit', pk=pk)
+    
+    aircraft_type = get_object_or_404(AircraftType, pk=pk)
+    try:
+        aircraft_type.code = request.POST.get('code', '').strip().upper()
+        aircraft_type.name = request.POST.get('name', '').strip()
+        aircraft_type.manufacturer = request.POST.get('manufacturer', '').strip()
+        aircraft_type.category = request.POST.get('category', '')
+        aircraft_type.size_code = request.POST.get('size_code', '')
+        aircraft_type.is_wide_body = request.POST.get('is_wide_body') == 'on'
+        aircraft_type.pax_capacity = int(request.POST.get('pax_capacity', 0)) if request.POST.get('pax_capacity') else 0
+        aircraft_type.save()
+        messages.success(request, 'Aircraft type updated successfully.')
+        return redirect('aircraft_types_list')
+    except Exception as e:
+        messages.error(request, f'Error updating aircraft type: {str(e)}')
+        return redirect('aircraft_type_edit', pk=pk)
+
+
+@require_POST
+def aircraft_type_delete(request, pk):
+    aircraft_type = get_object_or_404(AircraftType, pk=pk)
+    aircraft_type.delete()
+    messages.success(request, 'Aircraft type deleted.')
+    return redirect('aircraft_types_list')

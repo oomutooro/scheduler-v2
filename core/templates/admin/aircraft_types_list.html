@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% block title %}Aircraft Types Management — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Aircraft Types Management</h1>
+        <p class="page-subtitle">Manage aircraft reference data</p>
+    </div>
+    <a href="{% url 'aircraft_type_new' %}" class="btn btn-primary">+ Add Aircraft Type</a>
+</div>
+
+{% if aircraft_types %}
+<div class="table-card">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Code</th>
+                <th>Name</th>
+                <th>Manufacturer</th>
+                <th>Category</th>
+                <th>Size Code</th>
+                <th>Wide Body</th>
+                <th>Pax</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ac in aircraft_types %}
+            <tr>
+                <td><strong>{{ ac.code }}</strong></td>
+                <td>{{ ac.name }}</td>
+                <td>{{ ac.manufacturer }}</td>
+                <td>{{ ac.get_category_display }}</td>
+                <td><span class="code-badge badge-code-{{ ac.size_code|lower }}">{{ ac.size_code }}</span></td>
+                <td>
+                    {% if ac.is_wide_body %}
+                    <span class="badge badge-success">Yes</span>
+                    {% else %}
+                    <span class="badge badge-secondary">No</span>
+                    {% endif %}
+                </td>
+                <td>{{ ac.pax_capacity }}</td>
+                <td>
+                    <div class="action-buttons">
+                        <a href="{% url 'aircraft_type_edit' ac.pk %}" class="btn-icon btn-edit" title="Edit">✎</a>
+                        <form method="post" action="{% url 'aircraft_type_delete' ac.pk %}"
+                            onsubmit="return confirm('Delete this aircraft type?')">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-icon btn-delete" title="Delete">🗑</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">✈</div>
+    <h3>No aircraft types</h3>
+    <p>Add your first aircraft type.</p>
+    <a href="{% url 'aircraft_type_new' %}" class="btn btn-primary">+ Add Aircraft Type</a>
+</div>
+{% endif %}
+{% endblock %}

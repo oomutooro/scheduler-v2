@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}{% if form_action == 'new' %}Add{% else %}Edit{% endif %} Airline — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="back-link">
+    <a href="{% url 'airlines_list' %}">← Back to Airlines</a>
+</div>
+
+<h1 class="page-title">{% if form_action == 'new' %}Add{% else %}Edit{% endif %} Airline</h1>
+
+<div class="form-card">
+    <form method="post" action="{% if form_action == 'new' %}{% url 'airline_create' %}{% else %}{% url 'airline_update' airline.pk %}{% endif %}">
+        {% csrf_token %}
+
+        <div class="form-grid-2">
+            <div class="form-group">
+                <label class="form-label" for="iata_code">IATA Code *</label>
+                <input type="text" id="iata_code" name="iata_code" class="form-control" maxlength="2"
+                    value="{% if form_action == 'edit' %}{{ airline.iata_code }}{% endif %}" required>
+                <small class="form-hint">2-letter code (e.g., EK, QR, UR)</small>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="icao_code">ICAO Code *</label>
+                <input type="text" id="icao_code" name="icao_code" class="form-control" maxlength="3"
+                    value="{% if form_action == 'edit' %}{{ airline.icao_code }}{% endif %}" required>
+                <small class="form-hint">3-letter code (e.g., UAE, QTR, UGD)</small>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" for="name">Airline Name *</label>
+            <input type="text" id="name" name="name" class="form-control"
+                placeholder="e.g., Emirates, Qatar Airways, Uganda Airlines"
+                value="{% if form_action == 'edit' %}{{ airline.name }}{% endif %}" required>
+        </div>
+
+        <div class="form-group">
+            <label class="form-checkbox">
+                <input type="checkbox" name="is_home_airline" {% if form_action == 'edit' and airline.is_home_airline %}checked{% endif %}>
+                <span>Home Airline (Uganda Airlines)</span>
+            </label>
+            <small class="form-hint">Check this if this is the primary home airline at Entebbe</small>
+        </div>
+
+        <div class="form-actions">
+            <a href="{% url 'airlines_list' %}" class="btn btn-secondary">Cancel</a>
+            <button type="submit" class="btn btn-primary">
+                {% if form_action == 'new' %}Add Airline{% else %}Update Airline{% endif %}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

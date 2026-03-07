@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block title %}Airports Management — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Airports Management</h1>
+        <p class="page-subtitle">Manage airport reference data</p>
+    </div>
+    <a href="{% url 'airport_new' %}" class="btn btn-primary">+ Add Airport</a>
+</div>
+
+{% if airports %}
+<div class="table-card">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>IATA Code</th>
+                <th>ICAO Code</th>
+                <th>City Name</th>
+                <th>Country</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for airport in airports %}
+            <tr>
+                <td><strong>{{ airport.iata_code }}</strong></td>
+                <td>{{ airport.icao_code|default:"—" }}</td>
+                <td>{{ airport.city_name }}</td>
+                <td>{{ airport.country }}</td>
+                <td>
+                    <div class="action-buttons">
+                        <a href="{% url 'airport_edit' airport.pk %}" class="btn-icon btn-edit" title="Edit">✎</a>
+                        <form method="post" action="{% url 'airport_delete' airport.pk %}"
+                            onsubmit="return confirm('Delete this airport?')">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-icon btn-delete" title="Delete">🗑</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">✈</div>
+    <h3>No airports</h3>
+    <p>Add your first airport.</p>
+    <a href="{% url 'airport_new' %}" class="btn btn-primary">+ Add Airport</a>
+</div>
+{% endif %}
+{% endblock %}

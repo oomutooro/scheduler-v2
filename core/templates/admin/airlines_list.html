@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}Airlines Management — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Airlines Management</h1>
+        <p class="page-subtitle">Manage airline reference data</p>
+    </div>
+    <a href="{% url 'airline_new' %}" class="btn btn-primary">+ Add Airline</a>
+</div>
+
+{% if airlines %}
+<div class="table-card">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>IATA Code</th>
+                <th>ICAO Code</th>
+                <th>Airline Name</th>
+                <th>Home Airline</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for airline in airlines %}
+            <tr>
+                <td><strong>{{ airline.iata_code }}</strong></td>
+                <td>{{ airline.icao_code }}</td>
+                <td>{{ airline.name }}</td>
+                <td>
+                    {% if airline.is_home_airline %}
+                    <span class="badge badge-success">Yes</span>
+                    {% else %}
+                    <span class="badge badge-secondary">No</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div class="action-buttons">
+                        <a href="{% url 'airline_edit' airline.pk %}" class="btn-icon btn-edit" title="Edit">✎</a>
+                        <form method="post" action="{% url 'airline_delete' airline.pk %}"
+                            onsubmit="return confirm('Delete this airline?')">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-icon btn-delete" title="Delete">🗑</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">✈</div>
+    <h3>No airlines</h3>
+    <p>Add your first airline.</p>
+    <a href="{% url 'airline_new' %}" class="btn btn-primary">+ Add Airline</a>
+</div>
+{% endif %}
+{% endblock %}

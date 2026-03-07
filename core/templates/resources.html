@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% block title %}Airport Resources — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Airport Resources</h1>
+    <p class="page-subtitle">Overview of available gates, stands, and check-in counters</p>
+</div>
+
+<!-- Apron 1 Stands -->
+<section class="section-card">
+    <div class="section-header">
+        <h2 class="section-title">Parking Stands — Apron 1 (Main)</h2>
+        <p class="section-sub">9 stands, nose-in parking, Code B–F</p>
+    </div>
+    <div class="stands-grid">
+        {% for stand in apron1_stands %}
+        <div class="stand-card">
+            <div class="stand-card-header">
+                <span class="stand-name">Stand {{ stand.stand_number }}</span>
+                <span class="size-badge size-{{ stand.size_code|lower }}">Code {{ stand.size_code }}</span>
+            </div>
+            <div class="stand-features">
+                {% if stand.has_boarding_bridge %}
+                <div class="feature feature-yes">✔ Has boarding bridge</div>
+                <div class="feature feature-info">Connected to Gate {{ stand.gates.first.gate_number }}</div>
+                {% else %}
+                <div class="feature feature-no">✗ No boarding bridge</div>
+                {% endif %}
+
+                {% with subs=stand.sub_stands.all %}
+                {% if subs %}
+                <div class="feature feature-yes">✔ Can subdivide</div>
+                <div class="subdivisions">
+                    Subdivisions:
+                    {% for sub in subs %}
+                    <span class="sub-badge">Stand {{ sub.stand_number }} (Code {{ sub.size_code }})</span>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="feature feature-no">✗ Cannot subdivide</div>
+                {% endif %}
+                {% endwith %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Stand Details Summary -->
+    <div class="stand-details-box">
+        <strong>Stand Details</strong>
+        <ul>
+            <li>Code E stands: 2, 4, 5, 6, 9</li>
+            <li>Code C stands: 3, 8 (also 5A, 5B, 6A, 6B, 7A, 7B when subdivided)</li>
+            <li>Code F stand: 7</li>
+            <li>Code B stand: 10</li>
+            <li>Stands with boarding bridges: 5 (Gate 2B), 6 (Gate 4)</li>
+        </ul>
+    </div>
+</section>
+
+<!-- Apron 1 Extended -->
+<section class="section-card">
+    <div class="section-header">
+        <h2 class="section-title">Parking Stands — Apron 1 Extended (Remote)</h2>
+        <p class="section-sub">6 stands, nose-out parking, all Code C, remote busing required</p>
+    </div>
+    <div class="stands-grid">
+        {% for stand in apron1ext_stands %}
+        <div class="stand-card stand-remote">
+            <div class="stand-card-header">
+                <span class="stand-name">Stand {{ stand.stand_number }}</span>
+                <span class="size-badge size-c">Code {{ stand.size_code }}</span>
+            </div>
+            <div class="stand-features">
+                <div class="feature feature-no">✗ No boarding bridge</div>
+                <div class="feature feature-info">🚌 Remote stand</div>
+                <div class="feature feature-no">✗ Cannot subdivide</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Gates -->
+<section class="section-card">
+    <h2 class="section-title">Gates</h2>
+    <p class="section-sub">{{ gates.count }} total gates</p>
+    <div class="gates-grid">
+        {% for gate in gates %}
+        <div class="gate-card {% if gate.has_boarding_bridge %}gate-bridge{% endif %}">
+            <div class="gate-card-header">
+                <span class="gate-name">Gate {{ gate.gate_number }}</span>
+                {% if gate.has_boarding_bridge %}
+                <span class="bridge-badge">Bridge</span>
+                {% endif %}
+            </div>
+            {% if gate.has_boarding_bridge %}
+            <div class="gate-info">
+                <span class="gate-feature">Connected to Stand {{ gate.connected_stand.stand_number }}</span>
+            </div>
+            {% else %}
+            <div class="gate-info">
+                <span class="gate-feature no-bridge">No boarding bridge</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Check-in Counters -->
+<section class="section-card">
+    <h2 class="section-title">Check-in Counters</h2>
+    <p class="section-sub">{{ counter_total }} total counters — 22 common use</p>
+    <div class="counters-info">
+        <div class="counter-group">
+            <h4>Dedicated — Uganda Airlines (Counters 1–4)</h4>
+            <div class="counter-track">
+                {% for c in dedicated_counters %}
+                <div class="counter-cell counter-dedicated"
+                    title="Counter {{ c.counter_number }} — Uganda Airlines Dedicated">{{ c.counter_number }}</div>
+                {% endfor %}
+            </div>
+            <p class="counter-note">Available to other airlines only when Uganda Airlines has no active flight. Uganda
+                Airlines can use all 4 even for small aircraft, unless capacity requires overflow.</p>
+        </div>
+        <div class="counter-group">
+            <h4>Common Use (Counters 5–22)</h4>
+            <div class="counter-track">
+                {% for c in common_counters %}
+                <div class="counter-cell counter-common" title="Counter {{ c.counter_number }}">{{ c.counter_number }}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="rules-box">
+        <strong>Counter Allocation Rules</strong>
+        <ul>
+            <li>Wide body aircraft: 5–7 counters, check-in opens 3 hrs before departure</li>
+            <li>Other aircraft: 3–4 counters, check-in opens 2 hrs before departure</li>
+            <li>Check-in closes 1 hour before all flights</li>
+            <li>Sharing allowed: next airline can start with ≥2 counters if previous closes within 30 min</li>
+            <li>Wide body airlines must start with at least 4 counters</li>
+        </ul>
+    </div>
+</section>
+{% endblock %}
