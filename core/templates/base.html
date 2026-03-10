@@ -40,6 +40,9 @@
                     <span class="nav-icon">🗄</span> Resources
                 </a></li>
                 <li class="navbar-divider"></li>
+                <li><button id="theme-toggle" class="nav-link" title="Toggle theme">
+                    <span class="nav-icon" id="theme-icon">🌙</span>
+                </button></li>
                 <li><a href="{% url 'admin_dashboard' %}" class="nav-link {% if active_page == 'admin' %}active{% endif %}">
                     <span class="nav-icon">⚙</span> Admin
                 </a></li>

@@ -42,6 +42,35 @@
   --spacing-6: 1.5rem;
 }
 
+/* ── Dark mode variables ── */
+:root.dark {
+  /* primary colors can stay similar or slightly lighter for contrast */
+  --primary: #90caf9;
+  --primary-dark: #5d99c6;
+  --primary-light: #e3f2fd;
+  --success: #4caf50;
+  --success-light: #a5d6a7;
+  --warning: #ffb74d;
+  --warning-light: #ffe082;
+  --danger: #e57373;
+  --danger-light: #ef9a9a;
+  /* neutral/grey palette flipped for dark background */
+  --gray-50: #121212;
+  --gray-100: #1e1e1e;
+  --gray-200: #2c2c2c;
+  --gray-300: #383838;
+  --gray-500: #b0bec5;
+  --gray-700: #90a4ae;
+  --gray-900: #eceff1;
+  --white: #121212;
+  --text: var(--gray-900);
+  --text-secondary: var(--gray-500);
+  --border: var(--gray-700);
+  --border-light: var(--gray-600);
+  --surface: var(--gray-100);
+  --surface-light: var(--gray-200);
+}
+
 /* ── Reset & Base ── */
 *,
 *::before,
@@ -58,8 +87,8 @@ html {
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--gray-50);
-  color: var(--gray-900);
+  background: var(--surface);
+  color: var(--text);
   line-height: 1.5;
 }
 
@@ -134,6 +163,12 @@ ul {
   background: var(--gray-100);
   color: var(--gray-900);
   text-decoration: none;
+}
+
+#theme-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
 }
 
 .nav-link.active {

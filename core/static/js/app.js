@@ -1,6 +1,41 @@
 /* Entebbe Airport Slotting System — App JavaScript */
 
+// ── Theme initialization (runs as soon as this script loads) ──
+(function() {
+  try {
+    const stored = localStorage.getItem('theme');
+    if (stored === 'dark' ||
+        (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    }
+  } catch (e) {
+    // localStorage may be unavailable in some browsers
+  }
+})();
+
 document.addEventListener('DOMContentLoaded', function () {
+    // update icon based on current theme
+    const updateIcon = () => {
+      const icon = document.getElementById('theme-icon');
+      if (!icon) return;
+      if (document.documentElement.classList.contains('dark')) {
+        icon.textContent = '☀';
+      } else {
+        icon.textContent = '🌙';
+      }
+    };
+
+    const toggleBtn = document.getElementById('theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        document.documentElement.classList.toggle('dark');
+        try {
+          localStorage.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+        } catch (_) {}
+        updateIcon();
+      });
+      updateIcon();
+    }
 
   // ── Auto-dismiss alerts after 5 seconds
   document.querySelectorAll('.alert').forEach(function (alert) {
