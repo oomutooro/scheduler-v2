@@ -45,6 +45,8 @@ def generate_report_data(season: str, year: int) -> dict:
 
     peak_arr_hour = hourly_arrivals.index(max(hourly_arrivals)) if max(hourly_arrivals) > 0 else None
     peak_dep_hour = hourly_departures.index(max(hourly_departures)) if max(hourly_departures) > 0 else None
+    
+    busiest_day = max(day_counts.items(), key=lambda x: x[1])[0] if any(day_counts.values()) else "N/A"
 
     # 3. Airline Performance
     airline_perf = []
@@ -128,6 +130,7 @@ def generate_report_data(season: str, year: int) -> dict:
         'hourly_departures': hourly_departures,
         'peak_arr_hour': peak_arr_hour,
         'peak_dep_hour': peak_dep_hour,
+        'busiest_day': busiest_day,
         
         'airline_perf': airline_perf,
         

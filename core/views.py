@@ -869,6 +869,24 @@ def season_allocations_view(request):
         if p.airline_id not in gate_prefs: gate_prefs[p.airline_id] = []
         gate_prefs[p.airline_id].append(p)
     
+    # Pre-fetch all allocations to calculate specific conflict reasons efficiently
+    flight_ids = [f.id for f in qs]
+    
+    stand_dates_qs = StandAllocation.objects.filter(flight_request_id__in=flight_ids).values('flight_request_id', 'date')
+    gate_dates_qs = GateAllocation.objects.filter(flight_request_id__in=flight_ids).values('flight_request_id', 'date')
+    checkin_dates_qs = CheckInAllocation.objects.filter(flight_request_id__in=flight_ids).values('flight_request_id', 'date')
+    
+    flight_stand_dates = {}
+    flight_gate_dates = {}
+    flight_checkin_dates = {}
+    
+    for sa in stand_dates_qs:
+        flight_stand_dates.setdefault(sa['flight_request_id'], set()).add(sa['date'])
+    for ga in gate_dates_qs:
+        flight_gate_dates.setdefault(ga['flight_request_id'], set()).add(ga['date'])
+    for ca in checkin_dates_qs:
+        flight_checkin_dates.setdefault(ca['flight_request_id'], set()).add(ca['date'])
+    
     # Build flight rows with allocations
     flight_rows = []
     for flight in qs:
@@ -929,6 +947,40 @@ def season_allocations_view(request):
                 if gate and gate.id != pref.preferred_gate_id:
                     warnings.append(f"Preferred gate is {pref.preferred_gate.gate_number} (currently on Gate {gate.gate_number})")
                 break
+                
+        conflict_reasons = []
+        if has_conflict:
+            range_start = flight.valid_from or season_start
+            range_end = flight.valid_to or season_end
+            
+            s_dates = flight_stand_dates.get(flight.id, set())
+            g_dates = flight_gate_dates.get(flight.id, set())
+            c_dates = flight_checkin_dates.get(flight.id, set())
+            
+            current = range_start
+            has_stand_missing = False
+            has_gate_missing = False
+            has_checkin_missing = False
+            
+            while current <= range_end:
+                if flight.operates_on_date(current):
+                    if current not in s_dates:
+                        has_stand_missing = True
+                    
+                    if flight.operation_type != 'arrival':
+                        dep_date = current + timedelta(days=flight.ground_days)
+                        if dep_date not in g_dates:
+                            has_gate_missing = True
+                        if dep_date not in c_dates:
+                            has_checkin_missing = True
+                current += timedelta(days=1)
+                
+            if has_stand_missing:
+                conflict_reasons.append("Stand")
+            if has_gate_missing:
+                conflict_reasons.append("Gate")
+            if has_checkin_missing:
+                conflict_reasons.append("Check-in")
         
         flight_rows.append({
             'flight': flight,
@@ -936,6 +988,7 @@ def season_allocations_view(request):
             'gate': gate,
             'checkin': checkin,
             'has_conflict': has_conflict,
+            'conflict_reasons': ", ".join(conflict_reasons),
             'allocated': stand or gate or checkin,
             'handler': handler,
             'warnings': warnings,
@@ -1146,6 +1199,82 @@ def flight_allocate_season_submit(request, flight_id):
     return redirect(f'/allocations/?season={season_filter}')
 
 
+def flight_resolve_conflict(request, flight_id):
+    """
+    Shows a UI to resolve conflicts by suggesting alternative flight times.
+    """
+    flight = get_object_or_404(FlightRequest, pk=flight_id)
+    season_filter = request.GET.get('season', flight.season)
+    
+    from core.services.conflict_resolution import find_alternative_slots
+    
+    # Check if there are actual conflicts before doing expensive search
+    if flight.status != 'conflict':
+        messages.info(request, "This flight does not have any conflicts to resolve.")
+        return redirect(f'/allocations/?season={season_filter}')
+        
+    # Generate alternative timings
+    suggestions = find_alternative_slots(flight, max_hours_search=4, interval_mins=15)
+    
+    context = {
+        'flight': flight,
+        'season_filter': season_filter,
+        'suggestions': suggestions,
+        'has_suggestions': len(suggestions) > 0,
+        'active_page': 'allocations'
+    }
+    return render(request, 'flight_resolve.html', context)
+
+
+@require_POST
+def flight_apply_resolution(request, flight_id):
+    """
+    Applies an alternative time schedule for the flight or rejects it.
+    """
+    flight = get_object_or_404(FlightRequest, pk=flight_id)
+    season_filter = request.POST.get('season', flight.season)
+    action = request.POST.get('action')
+    
+    if action == 'reject':
+        flight.status = 'cancelled'
+        flight.save()
+        StandAllocation.objects.filter(flight_request=flight).delete()
+        GateAllocation.objects.filter(flight_request=flight).delete()
+        CheckInAllocation.objects.filter(flight_request=flight).delete()
+        messages.success(request, f"Flight {flight.display_flight_numbers} has been rejected/cancelled.")
+        return redirect(f'/allocations/?season={season_filter}')
+        
+    elif action == 'apply_time':
+        arrival_str = request.POST.get('arrival_time')
+        departure_str = request.POST.get('departure_time')
+        
+        try:
+            if arrival_str and arrival_str != 'None':
+                flight.arrival_time = datetime.strptime(arrival_str, '%H:%M:%S').time()
+            if departure_str and departure_str != 'None':
+                flight.departure_time = datetime.strptime(departure_str, '%H:%M:%S').time()
+                
+            flight.status = 'pending'
+            flight.save()
+            
+            # Clear old and reallocate
+            StandAllocation.objects.filter(flight_request=flight).delete()
+            GateAllocation.objects.filter(flight_request=flight).delete()
+            CheckInAllocation.objects.filter(flight_request=flight).delete()
+            
+            results = allocate_resources_for_flight(flight)
+            
+            if flight.status == 'allocated':
+                messages.success(request, f"Successfully rescheduled and allocated flight to new times.")
+            else:
+                messages.warning(request, f"Schedule updated, but some conflicts remain ({results['conflicts']} conflicts).")
+                
+        except Exception as e:
+            messages.error(request, f"Error updating flight times: {str(e)}")
+            
+    return redirect(f'/allocations/?season={season_filter}')
+
+
 @require_POST
 def season_allocations_auto(request):
     """
@@ -1164,6 +1293,8 @@ def season_allocations_auto(request):
     success_count = 0
     error_count = 0
     
+    alloc_cache = {}
+    
     for flight_id in flight_ids:
         try:
             flight = FlightRequest.objects.get(id=flight_id)
@@ -1181,9 +1312,9 @@ def season_allocations_auto(request):
             while current_date <= season_end:
                 if flight.operates_on_date(current_date):
                     # Try to allocate resources for this date
-                    stand_allocated = allocate_stand(flight, current_date)
-                    gate_allocated = allocate_gate(flight, current_date)
-                    checkin_allocated = allocate_checkin(flight, current_date)
+                    stand_allocated = allocate_stand(flight, current_date, alloc_cache)
+                    gate_allocated = allocate_gate(flight, current_date, alloc_cache)
+                    checkin_allocated = allocate_checkin(flight, current_date, alloc_cache)
                     
                     if stand_allocated or gate_allocated or checkin_allocated:
                         date_success = True

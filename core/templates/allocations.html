@@ -145,7 +145,13 @@
                         <span class="unallocated">—</span>
                         {% endif %}
                     </td>
-                    <td><span class="status-badge status-{{ row.flight.status }}">{{ row.flight.status|capfirst }}</span></td>
+                    <td>
+                        <span class="status-badge status-{{ row.flight.status }}">{{ row.flight.status|capfirst }}</span>
+                        {% if row.has_conflict and row.conflict_reasons %}
+                        <br><small style="color: #dc2626; font-size: 11px; white-space: nowrap;">Missing: {{ row.conflict_reasons }}</small>
+                        <br><a href="{% url 'flight_resolve_conflict' row.flight.id %}?season={{ season_filter }}" class="btn btn-sm" style="margin-top: 4px; font-size: 11px; padding: 2px 6px; background-color: #fef2f2; color: #dc2626; border: 1px solid #f87171;">Resolve 🔍</a>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

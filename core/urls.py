@@ -32,6 +32,8 @@ urlpatterns = [
     path('allocations/auto/', views.season_allocations_auto, name='season_allocations_auto'),
     path('allocations/flight/<int:flight_id>/', views.flight_allocate_season, name='flight_allocate_season'),
     path('allocations/flight/<int:flight_id>/submit/', views.flight_allocate_season_submit, name='flight_allocate_season_submit'),
+    path('allocations/flight/<int:flight_id>/resolve/', views.flight_resolve_conflict, name='flight_resolve_conflict'),
+    path('allocations/flight/<int:flight_id>/resolve/apply/', views.flight_apply_resolution, name='flight_apply_resolution'),
 
     # Resources
     path('resources/', views.resources_view, name='resources'),

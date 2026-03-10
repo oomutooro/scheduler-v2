@@ -110,7 +110,11 @@
     <h3>Time-of-Day Traffic Pattern</h3>
     <canvas id="todChart" height="100"></canvas>
     
-    <div class="grid-2" style="margin-top: 20px;">
+    <div class="grid-3" style="margin-top: 20px;">
+        <div>
+            <strong>Busiest Day:</strong> 
+            {{ busiest_day }}
+        </div>
         <div>
             <strong>Peak Arrival Hour:</strong> 
             {{ peak_arr_hour }}:00

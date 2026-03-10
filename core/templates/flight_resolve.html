@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+{% block title %}Resolve Conflict — {{ flight.arrival_flight_number|default:flight.departure_flight_number }} — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Resolve Flight Conflict</h1>
+        <p class="page-subtitle">{{ flight.airline.name }} — {{ flight.season|capfirst }} {{ flight.year }}</p>
+    </div>
+    <a href="/allocations/?season={{ season_filter }}" class="btn btn-secondary btn-sm">← Back to Allocations</a>
+</div>
+
+<div class="section-card" style="margin-bottom: 24px;">
+    <div class="section-header">
+        <h2 class="section-title">Flight Details</h2>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; padding: 20px;">
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Flight Numbers</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                {% if flight.arrival_flight_number %}{{ flight.arrival_flight_number }}{% endif %}
+                {% if flight.arrival_flight_number and flight.departure_flight_number %} / {% endif %}
+                {% if flight.departure_flight_number %}{{ flight.departure_flight_number }}{% endif %}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Aircraft Type</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                <span class="code-badge">{{ flight.aircraft_type.code }}</span> {{ flight.aircraft_type.name }}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Route</div>
+            <div style="font-size: 16px; font-weight: 600;">
+                {{ flight.origin.iata_code|default:"—" }} → {{ flight.destination.iata_code|default:"—" }}
+            </div>
+        </div>
+        <div>
+            <div style="font-size: 12px; color: #dc2626; font-weight: bold; margin-bottom: 4px;">Original Schedule (Conflicted)</div>
+            <div style="font-size: 16px; font-weight: 600; color: #dc2626;">
+                {% if flight.arrival_time %}Arr: {{ flight.arrival_time|time:"H:i" }}{% endif %}
+                {% if flight.departure_time %}<br>Dep: {{ flight.departure_time|time:"H:i" }}{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div style="display: flex; gap: 24px;">
+    <div style="flex: 2;">
+        <div class="section-card">
+            <div class="section-header">
+                <h2 class="section-title">Suggested Alternative Times</h2>
+                <p class="section-sub">These time slots have available resources (Stand, Gate, and Check-in)</p>
+            </div>
+            <div style="padding: 20px;">
+                {% if has_suggestions %}
+                <form method="post" action="{% url 'flight_apply_resolution' flight.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="season" value="{{ season_filter }}">
+                    <input type="hidden" name="action" value="apply_time">
+                    
+                    <div class="suggestions-grid" style="display: grid; gap: 16px; margin-bottom: 20px;">
+                        {% for suggestion in suggestions %}
+                        <label class="suggestion-card" style="display: block; padding: 16px; border: 2px solid #e5e7eb; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            <input type="radio" name="selected_time" value="{{ forloop.counter0 }}" required style="display: none;">
+                            <input type="hidden" id="arr_{{ forloop.counter0 }}" value="{{ suggestion.arrival_time|time:'H:i:s'|default:'None' }}">
+                            <input type="hidden" id="dep_{{ forloop.counter0 }}" value="{{ suggestion.departure_time|time:'H:i:s'|default:'None' }}">
+                            
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #111827; margin-bottom: 4px;">
+                                        {% if suggestion.shift_mins > 0 %}
+                                            <span style="color: #059669;">+{{ suggestion.shift_mins }} mins</span> (Later)
+                                        {% else %}
+                                            <span style="color: #4f46e5;">{{ suggestion.shift_mins }} mins</span> (Earlier)
+                                        {% endif %}
+                                    </div>
+                                    <div style="font-size: 16px; color: #4b5563;">
+                                        {% if suggestion.arrival_time %}Arr: <strong>{{ suggestion.arrival_time|time:"H:i" }}</strong>{% endif %}
+                                        {% if suggestion.arrival_time and suggestion.departure_time %} | {% endif %}
+                                        {% if suggestion.departure_time %}Dep: <strong>{{ suggestion.departure_time|time:"H:i" }}</strong>{% endif %}
+                                    </div>
+                                </div>
+                                <div class="selection-indicator" style="width: 24px; height: 24px; border-radius: 50%; border: 2px solid #d1d5db; display: flex; align-items: center; justify-content: center;">
+                                    <div class="inner-dot" style="width: 12px; height: 12px; border-radius: 50%; background: transparent;"></div>
+                                </div>
+                            </div>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    
+                    <!-- Hidden inputs to submit the actual times of the selected radio button -->
+                    <input type="hidden" name="arrival_time" id="submit_arrival_time" value="">
+                    <input type="hidden" name="departure_time" id="submit_departure_time" value="">
+                    
+                    <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 16px;">
+                        Accept Selected Time & Reschedule
+                    </button>
+                </form>
+                {% else %}
+                <div class="empty-state" style="padding: 40px 20px;">
+                    <div class="empty-state-icon">🕒</div>
+                    <h3>No Suggestions Found</h3>
+                    <p>We searched up to 4 hours forwards and backwards, but could not find a time slot where all required resources are available simultaneously.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div style="flex: 1;">
+        <div class="section-card" style="border-top: 4px solid #ef4444;">
+            <div class="section-header">
+                <h2 class="section-title">Reject Flight</h2>
+            </div>
+            <div style="padding: 20px;">
+                <p style="color: #4b5563; margin-bottom: 20px;">If the suggested times are not suitable, or no times are available, you can reject this flight request.</p>
+                
+                <form method="post" action="{% url 'flight_apply_resolution' flight.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="season" value="{{ season_filter }}">
+                    <input type="hidden" name="action" value="reject">
+                    <button type="submit" class="btn" style="background-color: #fef2f2; color: #dc2626; border: 1px solid #f87171; width: 100%;" onclick="return confirm('Are you sure you want to completely reject/cancel this flight request?');">
+                        ✕ Reject Flight Request
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.suggestion-card:hover {
+    border-color: #9ca3af !important;
+    background-color: #f9fafb;
+}
+
+input[type="radio"]:checked + input + input + div {
+    border-color: #2563eb !important;
+}
+
+input[type="radio"]:checked + input + input + div .selection-indicator {
+    border-color: #2563eb !important;
+}
+
+input[type="radio"]:checked + input + input + div .selection-indicator .inner-dot {
+    background: #2563eb !important;
+}
+</style>
+
+<script>
+document.querySelectorAll('input[type="radio"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+        const val = this.value;
+        const arr = document.getElementById('arr_' + val).value;
+        const dep = document.getElementById('dep_' + val).value;
+        
+        document.getElementById('submit_arrival_time').value = arr;
+        document.getElementById('submit_departure_time').value = dep;
+        
+        // Visual update
+        document.querySelectorAll('.suggestion-card').forEach(card => {
+            card.style.borderColor = '#e5e7eb';
+            card.style.backgroundColor = 'transparent';
+        });
+        this.closest('.suggestion-card').style.borderColor = '#3b82f6';
+        this.closest('.suggestion-card').style.backgroundColor = '#eff6ff';
+    });
+});
+</script>
+{% endblock %}
