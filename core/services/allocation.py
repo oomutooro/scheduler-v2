@@ -23,10 +23,20 @@ def time_subtract_minutes(t: time, minutes: int) -> time:
     dt = datetime.combine(date.today(), t) - timedelta(minutes=minutes)
     return dt.time()
 
+def interval_minutes(t: time):
+    return t.hour * 60 + t.minute
 
 def times_overlap(start1: time, end1: time, start2: time, end2: time) -> bool:
-    """Check if two time intervals overlap."""
-    return start1 < end2 and end1 > start2
+    """Check if two time intervals overlap. Handles cross-midnight."""
+    s1 = interval_minutes(start1)
+    e1 = interval_minutes(end1)
+    if e1 <= s1: e1 += 1440
+
+    s2 = interval_minutes(start2)
+    e2 = interval_minutes(end2)
+    if e2 <= s2: e2 += 1440
+
+    return s1 < e2 and e1 > s2
 
 
 def get_allocated_stands_on_date(date_: date) -> list:
@@ -123,9 +133,9 @@ def get_simultaneous_airline_flights(flight: FlightRequest, date_: date):
 def allocate_stand(flight: FlightRequest, date_: date) -> Optional[StandAllocation]:
     """
     Allocate a suitable stand for the flight on the given date.
-    For recurring flights, try to reuse the same stand from a previous allocation.
-    Wide-body prefers stands with boarding bridges (5 or 6).
-    Returns StandAllocation if successful, None if conflict.
+    For overnight flights, it creates multiple StandAllocation records (arrival night,
+    full intermediate days, departure morning) spanning the ground days, and restricts
+    to remote/extended apron parking.
     """
     arrival = flight.arrival_time or flight.departure_time
     departure = flight.departure_time or flight.arrival_time
@@ -134,44 +144,73 @@ def allocate_stand(flight: FlightRequest, date_: date) -> Optional[StandAllocati
 
     # Check if this flight already has an allocation on another date and try to reuse it
     prev_stand_alloc, _ = find_previous_allocation_for_flight(flight, date_)
-    if prev_stand_alloc:
-        # Try to reuse the same stand
-        existing = get_allocated_stands_on_date(date_)
-        conflict = False
-        for (sid, sstart, send) in existing:
-            if sid == prev_stand_alloc.stand_id and times_overlap(arrival, departure, sstart, send):
-                conflict = True
-                break
-        
-        if not conflict:
-            alloc = StandAllocation(
-                flight_request=flight,
-                stand=prev_stand_alloc.stand,
-                date=date_,
-                start_time=arrival,
-                end_time=departure,
-            )
-            alloc.save()
-            return alloc
 
-    existing = get_allocated_stands_on_date(date_)
+    is_overnight = flight.is_overnight
+    ground_days = flight.ground_days
+
+    # Define the date spans required for this stand allocation
+    date_spans = []
+    if is_overnight:
+        # Arrival date: arrival_time to 23:59
+        date_spans.append((date_, arrival, time(23, 59, 59)))
+        # Intermediate days
+        for d in range(1, ground_days):
+            date_spans.append((date_ + timedelta(days=d), time(0, 0), time(23, 59, 59)))
+        # Departure date: 00:00 to departure_time
+        date_spans.append((date_ + timedelta(days=ground_days), time(0, 0), departure))
+    else:
+        date_spans.append((date_, arrival, departure))
+
+    def _check_conflict(stand_id):
+        # Must be free on all required date spans
+        for d, s, e in date_spans:
+            existing = get_allocated_stands_on_date(d)
+            for (sid, sstart, send) in existing:
+                if sid == stand_id and times_overlap(s, e, sstart, send):
+                    return True
+        return False
+
+    # Try to reuse the same stand
+    if prev_stand_alloc:
+        if not _check_conflict(prev_stand_alloc.stand_id):
+            # Create records for all spans
+            for d, s, e in date_spans:
+                StandAllocation.objects.create(
+                    flight_request=flight,
+                    stand=prev_stand_alloc.stand,
+                    date=d,
+                    start_time=s,
+                    end_time=e,
+                )
+            return prev_stand_alloc
 
     # Build preferred stand ordering
-    all_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True)
+    if is_overnight:
+        if flight.aircraft_type.is_wide_body or flight.aircraft_type.size_code in ('D', 'E', 'F'):
+            # Wide-bodies cannot fit on the remote apron (which is all Code C). 
+            # They must use the main apron even overnight.
+            all_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True)
+        else:
+            # Policy: narrow-body overnight flights must use remote/extended apron
+            all_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True).filter(
+                Q(apron='apron1ext') | Q(is_remote=True)
+            )
+    else:
+        all_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True)
 
     def stand_priority(stand):
         score = 0
         if flight.aircraft_type.is_wide_body:
             if stand.has_boarding_bridge:
-                score += 100   # prefer bridge stands for wide-body
+                score += 100
             if stand.size_code in ('E', 'F'):
                 score += 50
         else:
             if not stand.has_boarding_bridge:
-                score += 20    # narrow-body doesn't need bridge
-        if stand.is_remote:
-            score -= 10        # prefer non-remote
-        return -score  # sort ascending so highest score first
+                score += 20
+        if stand.is_remote and not is_overnight:
+            score -= 10
+        return -score
 
     candidates = sorted(
         [s for s in all_stands if s.can_accommodate(flight.aircraft_type)],
@@ -179,23 +218,22 @@ def allocate_stand(flight: FlightRequest, date_: date) -> Optional[StandAllocati
     )
 
     for stand in candidates:
-        conflict = False
-        for (sid, sstart, send) in existing:
-            if sid == stand.id and times_overlap(arrival, departure, sstart, send):
-                conflict = True
-                break
-        if not conflict:
-            alloc = StandAllocation(
-                flight_request=flight,
-                stand=stand,
-                date=date_,
-                start_time=arrival,
-                end_time=departure,
-            )
-            alloc.save()
-            return alloc
+        if not _check_conflict(stand.id):
+            # Create all spans
+            first_alloc = None
+            for d, s, e in date_spans:
+                alloc = StandAllocation.objects.create(
+                    flight_request=flight,
+                    stand=stand,
+                    date=d,
+                    start_time=s,
+                    end_time=e,
+                )
+                if not first_alloc:
+                    first_alloc = alloc
+            return first_alloc
 
-    return None  # No available stand
+    return None
 
 
 def allocate_gate(flight: FlightRequest, date_: date) -> Optional[GateAllocation]:
@@ -288,6 +326,23 @@ def allocate_checkin(flight: FlightRequest, date_: date) -> Optional[CheckInAllo
     checkin_close = time_subtract_minutes(departure, 60)
     checkin_open = time_subtract_minutes(checkin_close, flight.checkin_duration_hours * 60)
     
+    num_counters_needed = flight.min_counters
+    is_home = flight.airline.is_home_airline
+
+    # Special Rule: Uganda Airlines (home airline) small/narrow-body flights
+    # exclusively share counters 1-4 regardless of overlaps or simultaneity.
+    if is_home and not (flight.aircraft_type.is_wide_body or flight.aircraft_type.size_code in ('D', 'E', 'F')):
+        alloc = CheckInAllocation(
+            flight_request=flight,
+            counter_from=1,
+            counter_to=4,
+            date=date_,
+            start_time=checkin_open,
+            end_time=checkin_close,
+        )
+        alloc.save()
+        return alloc
+
     # Check if there are simultaneous flights from same airline
     simultaneous = get_simultaneous_airline_flights(flight, date_)
     
@@ -310,8 +365,6 @@ def allocate_checkin(flight: FlightRequest, date_: date) -> Optional[CheckInAllo
             alloc.save()
             return alloc
     
-    num_counters_needed = flight.min_counters
-    is_home = flight.airline.is_home_airline
     existing_allocs = list(get_allocated_counters_on_date(date_))
 
     # Get airline's current counter usage
@@ -427,3 +480,76 @@ def allocate_resources_for_date(date_: date) -> dict:
 def get_conflicts_for_date(date_: date) -> list:
     """Return list of flights with conflicts on a given date."""
     return list(FlightRequest.objects.filter(status='conflict'))
+
+
+def allocate_resources_for_flight(flight: FlightRequest) -> dict:
+    """
+    Auto-allocate stands, gates, and check-in counters for all operating
+    dates of a single flight within its season (or valid_from/valid_to range).
+
+    Returns a summary dict:
+        {'allocated': N, 'conflicts': N, 'skipped': N, 'total_dates': N}
+
+    Also updates flight.status:
+        - 'allocated'  if every operating date got at least some resource
+        - 'conflict'   if any operating date could not get a stand
+        - 'pending'    if no times are set (nothing to allocate)
+    """
+    from core.services.season import get_season_dates
+    from datetime import timedelta
+
+    # Determine date range
+    if flight.valid_from and flight.valid_to:
+        range_start = flight.valid_from
+        range_end = flight.valid_to
+    else:
+        range_start, range_end = get_season_dates(flight.season, flight.year)
+
+    # Nothing to allocate without times
+    if flight.arrival_time is None and flight.departure_time is None:
+        return {'allocated': 0, 'conflicts': 0, 'skipped': 0, 'total_dates': 0}
+
+    results = {'allocated': 0, 'conflicts': 0, 'skipped': 0, 'total_dates': 0}
+    current = range_start
+
+    while current <= range_end:
+        results['total_dates'] += 1
+
+        if not flight.operates_on_date(current):
+            results['skipped'] += 1
+            current += timedelta(days=1)
+            continue
+
+        # Skip if already allocated for this date
+        if StandAllocation.objects.filter(flight_request=flight, date=current).exists():
+            results['allocated'] += 1
+            current += timedelta(days=1)
+            continue
+
+        stand = allocate_stand(flight, current)
+        
+        # For overnight flights, allocate_stand handles all intermediate dates.
+        # Gate and check-in are always allocated on the departure date.
+        departure_date = current + flight.departure_date_offset
+        gate = allocate_gate(flight, departure_date)
+        checkin = allocate_checkin(flight, departure_date)
+
+        if stand or gate or checkin:
+            results['allocated'] += 1
+        else:
+            results['conflicts'] += 1
+
+        current += timedelta(days=1)
+
+    # Set flight status based on results
+    if results['allocated'] == 0 and results['conflicts'] == 0:
+        # No operating dates found / no times
+        flight.status = 'pending'
+    elif results['conflicts'] > 0:
+        flight.status = 'conflict'
+    else:
+        flight.status = 'allocated'
+    flight.save(update_fields=['status', 'updated_at'])
+
+    return results
+

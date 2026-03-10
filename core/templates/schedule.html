@@ -109,11 +109,21 @@
                     {% else %}Departure{% endif %}
                 </span></td>
                 <td>{{ row.flight.arrival_time|time:"H:i"|default:"—" }}</td>
-                <td>{{ row.flight.departure_time|time:"H:i"|default:"—" }}</td>
+                <td>
+                    {{ row.flight.departure_time|time:"H:i"|default:"—" }}
+                    {% if row.flight.is_overnight %}
+                    <span class="badge-code-f" style="padding: 1px 4px; font-size: 0.7em; border-radius: 3px; background-color: #fef08a; color: #854d0e; font-weight: bold; margin-left: 4px;">
+                        +{{ row.flight.ground_days }}d
+                    </span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if row.stand %}
                     <span class="resource-badge resource-stand">Stand {{ row.stand.stand.stand_number }}</span>
                     <br><small>{{ row.stand.start_time|time:"H:i" }} – {{ row.stand.end_time|time:"H:i" }}</small>
+                    {% if row.flight.is_overnight and row.stand.end_time > row.stand.start_time and row.stand.end_time.hour == 23 and row.stand.end_time.minute == 59 %}
+                    <br><small style="color: #854d0e;">(Overnight)</small>
+                    {% endif %}
                     {% else %}
                     <span class="unallocated">—</span>
                     {% endif %}

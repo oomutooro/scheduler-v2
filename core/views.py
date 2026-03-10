@@ -19,7 +19,62 @@ from core.models import (
 from core.services.season import (
     get_current_season, get_season_dates, get_summer_dates, get_winter_dates
 )
-from core.services.allocation import allocate_resources_for_date
+from core.services.allocation import allocate_resources_for_date, allocate_resources_for_flight
+
+
+# ─── Temporary System Data Seed (remove after use) ─────────────────────────────
+
+def seed_system_data(request):
+    """One-time seed view - adds missing aircraft types and airports. Remove after use."""
+    new_aircraft = [
+        ('B735','Boeing 737-500','Boeing','narrow_body','C',False,132),
+        ('B733','Boeing 737-300','Boeing','narrow_body','C',False,148),
+        ('B733F','Boeing 737-300 Freighter','Boeing','narrow_body','C',False,0),
+        ('B738F','Boeing 737-800 Freighter','Boeing','narrow_body','C',False,0),
+        ('B39M','Boeing 737 MAX 9','Boeing','narrow_body','C',False,220),
+        ('BCS3','Airbus A220-300','Airbus','narrow_body','C',False,140),
+        ('A332','Airbus A330-200','Airbus','wide_body','E',True,250),
+        ('B78X','Boeing 787-10 Dreamliner','Boeing','wide_body','E',True,330),
+        ('A359','Airbus A350-900','Airbus','wide_body','E',True,315),
+        ('A35K','Airbus A350-1000','Airbus','wide_body','E',True,366),
+    ]
+    
+    new_airports = [
+        ('HRE', 'FVHA', 'Harare', 'Zimbabwe'),
+        ('LUN', 'FLKK', 'Lusaka', 'Zambia'),
+        ('BJM', 'HBBA', 'Bujumbura', 'Burundi'),
+        ('JRO', 'HTKJ', 'Kilimanjaro', 'Tanzania'),
+        ('MBA', 'HKMO', 'Mombasa', 'Kenya'),
+        ('MGQ', 'HCMM', 'Mogadishu', 'Somalia'),
+        ('BOM', 'VABB', 'Mumbai', 'India'),
+        ('LGW', 'EGKK', 'London', 'United Kingdom'),
+        ('DAR', 'HTDA', 'Dar es Salaam', 'Tanzania'),
+        ('JNB', 'FAOR', 'Johannesburg', 'South Africa'),
+        ('FIH', 'FZAA', 'Kinshasa', 'DR Congo'),
+    ]
+
+    aircraft_results = {}
+    for code,name,mfr,cat,sz,wb,pax in new_aircraft:
+        obj, created = AircraftType.objects.get_or_create(
+            code=code,
+            defaults={'name':name,'manufacturer':mfr,'category':cat,'size_code':sz,'is_wide_body':wb,'pax_capacity':pax}
+        )
+        aircraft_results[code] = 'created' if created else 'already existed'
+        
+    airport_results = {}
+    for iata, icao, city, country in new_airports:
+        obj, created = Airport.objects.get_or_create(
+            iata_code=iata,
+            defaults={'icao_code': icao, 'city_name': city, 'country': country}
+        )
+        airport_results[iata] = 'created' if created else 'already existed'
+
+    return JsonResponse({
+        'total_aircraft': AircraftType.objects.count(),
+        'aircraft_results': aircraft_results,
+        'total_airports': Airport.objects.count(),
+        'airport_results': airport_results
+    })
 
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -39,6 +94,11 @@ def dashboard(request):
     summer_start_2026, summer_end_2026 = get_summer_dates(2026)
     winter_start_2025, winter_end_2025_26 = get_winter_dates(2025)
 
+    # Operational actions / summaries
+    pending_count = FlightRequest.objects.filter(status='pending').count()
+    airlines_with_requests = FlightRequest.objects.values_list('airline_id', flat=True).distinct()
+    missing_airlines_count = Airline.objects.exclude(id__in=airlines_with_requests).count()
+
     context = {
         'current_season': season_name,
         'current_year': year,
@@ -53,6 +113,8 @@ def dashboard(request):
         'summer_end_2026': summer_end_2026,
         'winter_start_2025': winter_start_2025,
         'winter_end_2025_26': winter_end_2025_26,
+        'pending_count': pending_count,
+        'missing_airlines_count': missing_airlines_count,
         'active_page': 'dashboard',
     }
     return render(request, 'dashboard.html', context)
@@ -220,9 +282,27 @@ def flight_create(request):
             valid_from=valid_from,
             valid_to=valid_to,
             days_of_operation=days_mask,
+            ground_days=int(request.POST.get('ground_days', 0)),
             notes=request.POST.get('notes', ''),
         )
-        messages.success(request, f'Flight request created successfully.')
+
+        # Auto-allocate resources for every operating date in the season
+        alloc_results = allocate_resources_for_flight(flight)
+        if alloc_results['total_dates'] == 0:
+            messages.success(request, 'Flight request created. Add arrival/departure times to enable auto-allocation.')
+        elif alloc_results['conflicts'] == 0:
+            messages.success(
+                request,
+                f'Flight request created and resources allocated across '
+                f'{alloc_results["allocated"]} operating date(s).'
+            )
+        else:
+            messages.warning(
+                request,
+                f'Flight request created — {alloc_results["allocated"]} date(s) allocated, '
+                f'{alloc_results["conflicts"]} conflict(s) detected. '
+                f'Check the Schedule page to resolve conflicts.'
+            )
         return redirect('flights_list')
 
     except Exception as e:
@@ -302,16 +382,33 @@ def flight_update(request, pk):
         flight.valid_from = valid_from
         flight.valid_to = valid_to
         flight.days_of_operation = days_mask
+        flight.ground_days = int(request.POST.get('ground_days', 0))
         flight.notes = request.POST.get('notes', '')
         flight.status = 'pending'  # reset status when edited
         flight.save()
 
-        # Clear old allocations
+        # Clear old allocations before re-allocating
         StandAllocation.objects.filter(flight_request=flight).delete()
         GateAllocation.objects.filter(flight_request=flight).delete()
         CheckInAllocation.objects.filter(flight_request=flight).delete()
 
-        messages.success(request, 'Flight request updated successfully.')
+        # Re-allocate resources for every operating date
+        alloc_results = allocate_resources_for_flight(flight)
+        if alloc_results['total_dates'] == 0:
+            messages.success(request, 'Flight request updated. Add arrival/departure times to enable auto-allocation.')
+        elif alloc_results['conflicts'] == 0:
+            messages.success(
+                request,
+                f'Flight request updated and resources re-allocated across '
+                f'{alloc_results["allocated"]} operating date(s).'
+            )
+        else:
+            messages.warning(
+                request,
+                f'Flight request updated — {alloc_results["allocated"]} date(s) allocated, '
+                f'{alloc_results["conflicts"]} conflict(s) detected. '
+                f'Check the Schedule page to resolve conflicts.'
+            )
         return _redirect_to_next_or_default(request, 'flights_list')
 
     except Exception as e:
@@ -1506,3 +1603,60 @@ def aircraft_type_delete(request, pk):
     aircraft_type.delete()
     messages.success(request, 'Aircraft type deleted.')
     return redirect('aircraft_types_list')
+
+
+# ─── Reports ──────────────────────────────────────────────────────────────────
+
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+from core.services.reports import generate_report_data
+from core.services.season import get_current_season
+
+def reports_dashboard(request):
+    season, year, _, _ = get_current_season()
+    season = request.GET.get('season', season)
+    year = int(request.GET.get('year', year))
+    
+    data = generate_report_data(season, year)
+    return render(request, 'reports/index.html', data)
+
+def reports_export_excel(request):
+    import openpyxl
+    season = request.GET.get('season')
+    year = int(request.GET.get('year'))
+    
+    data = generate_report_data(season, year)
+    
+    wb = openpyxl.Workbook()
+    # Sheet 1: Stats
+    ws = wb.active
+    ws.title = "Flight Statistics"
+    ws.append(["Season", season.capitalize(), "Year", year])
+    ws.append(["Total Flights", data.get('total_flights')])
+    ws.append([])
+    ws.append(["Operation Type", "Count"])
+    for op, c in data.get('ops_dict', {}).items():
+        ws.append([op, c])
+        
+    ws.append([])
+    ws.append(["Aircraft Size", "Count"])
+    for size, c in data.get('size_dict', {}).items():
+        ws.append([f"Code {size}", c])
+        
+    vs = wb.create_sheet("Airline Performance")
+    vs.append(["Airline", "Code", "Flights", "Estimated Weekly Pax", "Top Route"])
+    for p in data.get('airline_perf', []):
+        vs.append([p['airline'], p['code'], p['flights'], p['weekly_pax_est'], p['top_route']])
+    
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename=reports_{season}_{year}.xlsx'
+    wb.save(response)
+    return response
+
+def reports_export_pdf(request):
+    season = request.GET.get('season')
+    year = int(request.GET.get('year'))
+    
+    data = generate_report_data(season, year)
+    data['is_print'] = True
+    return render(request, 'reports/pdf.html', data)

@@ -2,6 +2,9 @@ from django.urls import path
 from core import views
 
 urlpatterns = [
+    # Temporary seeder - remove after use
+    path('_seed/system-data/', views.seed_system_data, name='seed_system_data'),
+
     # Dashboard
     path('', views.dashboard, name='dashboard'),
     path('admin/', views.admin_dashboard, name='admin_dashboard'),
@@ -32,6 +35,11 @@ urlpatterns = [
 
     # Resources
     path('resources/', views.resources_view, name='resources'),
+
+    # Reports
+    path('reports/', views.reports_dashboard, name='reports'),
+    path('reports/export/excel/', views.reports_export_excel, name='reports_export_excel'),
+    path('reports/export/pdf/', views.reports_export_pdf, name='reports_export_pdf'),
 
     # Airlines Management
     path('manage/airlines/', views.airlines_list, name='airlines_list'),

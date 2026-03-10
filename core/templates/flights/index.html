@@ -90,7 +90,8 @@
                 <th>Aircraft</th>
                 <th>Route</th>
                 <th>Operation</th>
-                <th>Season / Year</th>
+                <th>Start Date</th>
+                <th>End Date</th>
                 <th>Arrival</th>
                 <th>Departure</th>
                 <th>Days</th>
@@ -122,9 +123,17 @@
                         {% endif %}
                     </span>
                 </td>
-                <td>{{ row.flight.season|capfirst }} {{ row.flight.year }}</td>
+                <td>{{ row.flight.start_date|date:"d M Y" }}</td>
+                <td>{{ row.flight.end_date|date:"d M Y" }}</td>
                 <td>{{ row.flight.arrival_time|time:"H:i"|default:"—" }}</td>
-                <td>{{ row.flight.departure_time|time:"H:i"|default:"—" }}</td>
+                <td>
+                    {{ row.flight.departure_time|time:"H:i"|default:"—" }}
+                    {% if row.flight.is_overnight %}
+                    <span class="badge-code-f" style="padding: 1px 4px; font-size: 0.7em; border-radius: 3px; background-color: #fef08a; color: #854d0e; font-weight: bold; margin-left: 4px;">
+                        +{{ row.flight.ground_days }}d
+                    </span>
+                    {% endif %}
+                </td>
                 <td>
                     <div class="days-matrix-cell">
                         <div class="days-matrix-header">

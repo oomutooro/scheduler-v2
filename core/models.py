@@ -152,6 +152,8 @@ class FlightRequest(models.Model):
     valid_to = models.DateField(null=True, blank=True)
     # Days of the week bitmask
     days_of_operation = models.IntegerField(default=127)  # all 7 days by default
+    # Number of nights on ground
+    ground_days = models.IntegerField(default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -159,6 +161,17 @@ class FlightRequest(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+    @property
+    def is_overnight(self):
+        """Return True if flight stays on ground overnight or longer."""
+        return self.ground_days > 0
+
+    @property
+    def departure_date_offset(self):
+        """Return timedelta for the departure date offset resulting from ground days."""
+        import datetime
+        return datetime.timedelta(days=self.ground_days)
 
     def __str__(self):
         nums = []
@@ -217,12 +230,34 @@ class FlightRequest(models.Model):
     @property
     def min_counters(self):
         """Minimum check-in counters to start with."""
-        return 4 if self.aircraft_type.is_wide_body else 2
+        if self.aircraft_type.is_wide_body or self.aircraft_type.size_code in ('D', 'E', 'F'):
+            return 6
+        return 4
 
     @property
     def max_counters(self):
         """Maximum check-in counters."""
-        return 7 if self.aircraft_type.is_wide_body else 4
+        if self.aircraft_type.is_wide_body or self.aircraft_type.size_code in ('D', 'E', 'F'):
+            return 8
+        return 5
+
+    @property
+    def start_date(self):
+        """Effective start date of the flight request."""
+        if self.valid_from:
+            return self.valid_from
+        from core.services.season import get_season_dates
+        start, _ = get_season_dates(self.season, self.year)
+        return start
+
+    @property
+    def end_date(self):
+        """Effective end date of the flight request."""
+        if self.valid_to:
+            return self.valid_to
+        from core.services.season import get_season_dates
+        _, end = get_season_dates(self.season, self.year)
+        return end
 
 
 # ─── Airport Resources (Static reference — stands, gates, counters) ───────────

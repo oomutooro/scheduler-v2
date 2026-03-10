@@ -5,16 +5,16 @@
 - [x] Get user approval on plan
 
 ## Backend Setup
-- [/] Initialize Python Django project with dependencies
-- [ ] Create Django core app
-- [ ] Create database models
-  - [ ] Airlines model (IATA, ICAO, name)
-  - [ ] Airports model (IATA, ICAO, city name)
-  - [ ] Aircraft types model (code, category, wide_body flag)
-  - [ ] Flight requests model
-  - [ ] Resource allocation models (stands, gates, counters)
-- [ ] Admin panel configuration
-- [ ] Seed reference data (airlines, airports, aircraft types, stands, gates, counters)
+- [x] Initialize Python Django project with dependencies
+- [x] Create Django core app
+- [x] Create database models
+  - [x] Airlines model (IATA, ICAO, name)
+  - [x] Airports model (IATA, ICAO, city name)
+  - [x] Aircraft types model (code, category, wide_body flag)
+  - [x] Flight requests model
+  - [x] Resource allocation models (stands, gates, counters)
+- [x] Admin panel configuration
+- [x] Seed reference data (airlines, airports, aircraft types, stands, gates, counters)
 - [ ] Season logic (Summer/Winter date calculation)
 
 ## Views & URLs

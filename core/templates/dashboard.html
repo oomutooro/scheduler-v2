@@ -33,6 +33,22 @@
             <div class="stat-sub">Apron 1 + Apron 1 Extended</div>
         </div>
     </div>
+    <a href="{% url 'flights_list' %}" class="stat-card" style="text-decoration: none; color: inherit;">
+        <div class="stat-card-icon stat-icon-orange" style="background: rgba(245, 158, 11, 0.1); color: #f59e0b;">⏳</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ pending_count }}</div>
+            <div class="stat-label">Pending Approvals</div>
+            <div class="stat-sub">Click to review flight requests</div>
+        </div>
+    </a>
+    <a href="{% url 'admin_dashboard' %}" class="stat-card" style="text-decoration: none; color: inherit;">
+        <div class="stat-card-icon stat-icon-red" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">⚠</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ missing_airlines_count }}</div>
+            <div class="stat-label">Airlines Missing Requests</div>
+            <div class="stat-sub">Airlines with 0 schedule filings</div>
+        </div>
+    </a>
 </div>
 
 <!-- Season Information -->
@@ -45,8 +61,7 @@
                 <h3>Summer Season</h3>
             </div>
             <p class="season-desc">Last Sunday of March to Last Saturday of October</p>
-            <p class="season-example">Example: Summer 2026 ({{ summer_start_2026|date:"d M Y" }} – {{
-                summer_end_2026|date:"d M Y" }})</p>
+            <p class="season-example">Example: Summer 2026 ({{ summer_start_2026|date:"d M Y" }} – {{ summer_end_2026|date:"d M Y" }})</p>
         </div>
         <div class="season-card winter-card">
             <div class="season-card-header">
@@ -54,8 +69,7 @@
                 <h3>Winter Season</h3>
             </div>
             <p class="season-desc">Last Saturday of October to Last Sunday of March (next year)</p>
-            <p class="season-example">Example: Winter 2025 ({{ winter_start_2025|date:"d M Y" }} – {{
-                winter_end_2025_26|date:"d M Y" }})</p>
+            <p class="season-example">Example: Winter 2025 ({{ winter_start_2025|date:"d M Y" }} – {{ winter_end_2025_26|date:"d M Y" }})</p>
         </div>
     </div>
 </section>
