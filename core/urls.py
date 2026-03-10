@@ -40,6 +40,7 @@ urlpatterns = [
 
     # Reports
     path('reports/', views.reports_dashboard, name='reports'),
+    path('reports/daily-analysis/', views.daily_analysis, name='daily_analysis'),
     path('reports/export/excel/', views.reports_export_excel, name='reports_export_excel'),
     path('reports/export/pdf/', views.reports_export_pdf, name='reports_export_pdf'),
 

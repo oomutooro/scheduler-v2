@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block title %}Daily Analysis - {{ day_of_week }} - Scheduler v2{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
+<style>
+    .analysis-header {
+        background: linear-gradient(135deg, var(--primary), var(--primary-light));
+        padding: var(--spacing-6);
+        border-radius: var(--radius);
+        color: white;
+        margin-bottom: var(--spacing-4);
+    }
+    
+    .day-selector {
+        margin-bottom: var(--spacing-4);
+    }
+    
+    .day-selector select {
+        padding: var(--spacing-2) var(--spacing-3);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--text);
+    }
+    
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: var(--spacing-4);
+        margin-bottom: var(--spacing-6);
+    }
+    
+    .stat-card {
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-4);
+        text-align: center;
+    }
+    
+    .stat-number {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--primary);
+        margin: var(--spacing-2) 0;
+    }
+    
+    .stat-label {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    
+    .gantt-container {
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-4);
+        margin-bottom: var(--spacing-4);
+    }
+    
+    .gantt-timeline {
+        position: relative;
+        height: 600px;
+        overflow-x: auto;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: white;
+    }
+    
+    .timeline-header {
+        position: sticky;
+        top: 0;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        z-index: 10;
+    }
+    
+    .time-labels {
+        display: flex;
+        height: 40px;
+        border-bottom: 1px solid var(--border);
+    }
+    
+    .time-label {
+        flex: 1;
+        text-align: center;
+        padding: var(--spacing-1);
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        border-right: 1px solid var(--border);
+    }
+    
+    .flight-row {
+        display: flex;
+        border-bottom: 1px solid var(--border-light);
+        min-height: 80px;
+        align-items: flex-start;
+    }
+    
+    .flight-name {
+        width: 200px;
+        padding: var(--spacing-2);
+        font-weight: 600;
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        position: sticky;
+        left: 0;
+        z-index: 5;
+    }
+    
+    .flight-timeline {
+        flex: 1;
+        position: relative;
+        min-height: 75px;
+        display: flex;
+    }
+    
+    .resource-bar {
+        position: absolute;
+        height: 20px;
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+        color: white;
+        font-weight: 600;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .resource-bar.stand { background: #4CAF50; }
+    .resource-bar.gate { background: #2196F3; }
+    .resource-bar.checkin { background: #FF9800; }
+    
+    .legend {
+        display: flex;
+        gap: var(--spacing-4);
+        margin-bottom: var(--spacing-4);
+        flex-wrap: wrap;
+    }
+    
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-1);
+        font-size: 0.9rem;
+    }
+    
+    .legend-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 2px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="analysis-header">
+    <h1>Daily Resource Utilization Analysis</h1>
+    <p>{{ day_of_week }} - {{ season|title }} {{ year }}</p>
+</div>
+
+<div class="day-selector">
+    <form method="get">
+        <label for="day">Select Day of Week:</label>
+        <select name="day" id="day" onchange="this.form.submit()">
+            {% for day in day_options %}
+                <option value="{{ day|lower }}" {% if day == day_of_week %}selected{% endif %}>{{ day }}</option>
+            {% endfor %}
+        </select>
+        <input type="hidden" name="season" value="{{ season }}">
+        <input type="hidden" name="year" value="{{ year }}">
+    </form>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-number">{{ total_flights }}</div>
+        <div class="stat-label">Total Flights</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ allocated_flights }}</div>
+        <div class="stat-label">Allocated Flights</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ allocation_percentage|floatformat:1 }}%</div>
+        <div class="stat-label">Allocation Rate</div>
+    </div>
+</div>
+
+<div class="legend">
+    <div class="legend-item">
+        <div class="legend-color" style="background: #4CAF50;"></div>
+        <span>Parking Stand</span>
+    </div>
+    <div class="legend-item">
+        <div class="legend-color" style="background: #2196F3;"></div>
+        <span>Gate</span>
+    </div>
+    <div class="legend-item">
+        <div class="legend-color" style="background: #FF9800;"></div>
+        <span>Check-in Counters</span>
+    </div>
+</div>
+
+<div class="gantt-container">
+    <h3>Resource Utilization Timeline</h3>
+    <div class="gantt-timeline">
+        <div class="timeline-header">
+            <div class="time-labels">
+                <div class="time-label">00:00</div>
+                <div class="time-label">01:00</div>
+                <div class="time-label">02:00</div>
+                <div class="time-label">03:00</div>
+                <div class="time-label">04:00</div>
+                <div class="time-label">05:00</div>
+                <div class="time-label">06:00</div>
+                <div class="time-label">07:00</div>
+                <div class="time-label">08:00</div>
+                <div class="time-label">09:00</div>
+                <div class="time-label">10:00</div>
+                <div class="time-label">11:00</div>
+                <div class="time-label">12:00</div>
+                <div class="time-label">13:00</div>
+                <div class="time-label">14:00</div>
+                <div class="time-label">15:00</div>
+                <div class="time-label">16:00</div>
+                <div class="time-label">17:00</div>
+                <div class="time-label">18:00</div>
+                <div class="time-label">19:00</div>
+                <div class="time-label">20:00</div>
+                <div class="time-label">21:00</div>
+                <div class="time-label">22:00</div>
+                <div class="time-label">23:00</div>
+            </div>
+        </div>
+        
+        {% for flight in gantt_data %}
+        <div class="flight-row">
+            <div class="flight-name">
+                {{ flight.name }}
+                {% if flight.ground_days > 0 %}
+                    <br><small style="color: var(--text-secondary);">+{{ flight.ground_days }} night(s)</small>
+                {% endif %}
+            </div>
+            <div class="flight-timeline">
+                {% for resource in flight.resources %}
+                    {% if resource.start and resource.end %}
+                        <div class="resource-bar {{ resource.type }}"
+                             style="left: {{ resource.left_percent }}%;
+                                    width: {{ resource.width_percent }}%;
+                                    top: {% widthratio forloop.counter0 1 25 %}px;
+                                    background: {{ resource.color }};">
+                            {{ resource.resource }}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+        
+        {% if not gantt_data %}
+        <div class="flight-row">
+            <div style="padding: var(--spacing-4); text-align: center; width: 100%; color: var(--text-secondary);">
+                No flights allocated for this day.
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+// Auto-refresh functionality (optional - can be enabled if needed)
+function refreshPage() {
+    // Could add auto-refresh every few minutes if real-time updates are needed
+    // setTimeout(() => location.reload(), 300000); // 5 minutes
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Could add interactive features here
+});
+</script>
+{% endblock %}

@@ -1751,6 +1751,152 @@ def reports_dashboard(request):
     data = generate_report_data(season, year)
     return render(request, 'reports/index.html', data)
 
+def daily_analysis(request):
+    season, year, _, _ = get_current_season()
+    season = request.GET.get('season', season)
+    year = int(request.GET.get('year', year))
+    day_of_week = request.GET.get('day', 'monday').lower()
+    
+    # Get all flights for the season
+    flights = FlightRequest.objects.filter(season=season, year=year)
+    
+    # Map day names to bitmask values
+    day_masks = {
+        'sunday': 1, 'monday': 2, 'tuesday': 4, 'wednesday': 8,
+        'thursday': 16, 'friday': 32, 'saturday': 64
+    }
+    
+    if day_of_week not in day_masks:
+        day_of_week = 'monday'
+    
+    day_mask = day_masks[day_of_week]
+    
+    # Filter flights that operate on this day
+    day_flights = [f for f in flights if f.days_of_operation & day_mask]
+    
+    # Get allocations for these flights
+    flight_ids = [f.id for f in day_flights]
+    
+    # Get allocations for these flights on any date that falls on this day of week
+    from django.db.models import Q
+    
+    # Build Q objects for each day of week
+    day_query = Q()
+    for flight in day_flights:
+        # Find dates where this flight operates on the selected day
+        # For now, we'll get all allocations for these flights and filter by day of week
+        pass
+    
+    # Actually, let's get all allocations for these flights and then filter by day of week in Python
+    stand_allocs = StandAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request', 'stand')
+    gate_allocs = GateAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request', 'gate')  
+    checkin_allocs = CheckInAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request')
+    
+    # Filter allocations by day of week
+    # date.weekday() returns 0=Monday, 1=Tuesday, ..., 6=Sunday
+    # We need to map to our day order: Sunday=0, Monday=1, ..., Saturday=6
+    dow_mapping = {'sunday': 6, 'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3, 'friday': 4, 'saturday': 5}
+    target_dow = dow_mapping[day_of_week]
+    
+    day_allocs_stand = [alloc for alloc in stand_allocs if alloc.date.weekday() == target_dow]
+    day_allocs_gate = [alloc for alloc in gate_allocs if alloc.date.weekday() == target_dow]
+    day_allocs_checkin = [alloc for alloc in checkin_allocs if alloc.date.weekday() == target_dow]
+    
+    # Prepare data for Gantt chart
+    gantt_data = []
+    
+    for flight in day_flights:
+        flight_data = {
+            'id': flight.id,
+            'name': f"{flight.airline.iata_code} {flight.display_flight_numbers}",
+            'arrival_time': flight.arrival_time,
+            'departure_time': flight.departure_time,
+            'ground_days': flight.ground_days,
+            'resources': []
+        }
+        
+        # Add stand allocation if exists
+        stand_alloc = next((alloc for alloc in day_allocs_stand if alloc.flight_request == flight), None)
+        if stand_alloc:
+            start_minutes = stand_alloc.start_time.hour * 60 + stand_alloc.start_time.minute
+            end_minutes = stand_alloc.end_time.hour * 60 + stand_alloc.end_time.minute
+            if end_minutes < start_minutes:  # Handle overnight
+                end_minutes += 24 * 60
+            duration_hours = (end_minutes - start_minutes) / 60
+            left_percent = (start_minutes / (24 * 60)) * 100
+            width_percent = (duration_hours / 24) * 100
+            
+            flight_data['resources'].append({
+                'type': 'stand',
+                'resource': f"Stand {stand_alloc.stand.stand_number}",
+                'start': stand_alloc.start_time,
+                'end': stand_alloc.end_time,
+                'left_percent': left_percent,
+                'width_percent': width_percent,
+                'color': '#4CAF50'
+            })
+        
+        # Add gate allocation if exists
+        gate_alloc = next((alloc for alloc in day_allocs_gate if alloc.flight_request == flight), None)
+        if gate_alloc:
+            start_minutes = gate_alloc.start_time.hour * 60 + gate_alloc.start_time.minute
+            end_minutes = gate_alloc.end_time.hour * 60 + gate_alloc.end_time.minute
+            if end_minutes < start_minutes:  # Handle overnight
+                end_minutes += 24 * 60
+            duration_hours = (end_minutes - start_minutes) / 60
+            left_percent = (start_minutes / (24 * 60)) * 100
+            width_percent = (duration_hours / 24) * 100
+            
+            flight_data['resources'].append({
+                'type': 'gate',
+                'resource': f"Gate {gate_alloc.gate.gate_number}",
+                'start': gate_alloc.start_time,
+                'end': gate_alloc.end_time,
+                'left_percent': left_percent,
+                'width_percent': width_percent,
+                'color': '#2196F3'
+            })
+        
+        # Add check-in allocation if exists
+        checkin_alloc = next((alloc for alloc in day_allocs_checkin if alloc.flight_request == flight), None)
+        if checkin_alloc:
+            start_minutes = checkin_alloc.start_time.hour * 60 + checkin_alloc.start_time.minute
+            end_minutes = checkin_alloc.end_time.hour * 60 + checkin_alloc.end_time.minute
+            if end_minutes < start_minutes:  # Handle overnight
+                end_minutes += 24 * 60
+            duration_hours = (end_minutes - start_minutes) / 60
+            left_percent = (start_minutes / (24 * 60)) * 100
+            width_percent = (duration_hours / 24) * 100
+            
+            flight_data['resources'].append({
+                'type': 'checkin',
+                'resource': f"Counters {checkin_alloc.counter_from}-{checkin_alloc.counter_to}",
+                'start': checkin_alloc.start_time,
+                'end': checkin_alloc.end_time,
+                'left_percent': left_percent,
+                'width_percent': width_percent,
+                'color': '#FF9800'
+            })
+        
+        gantt_data.append(flight_data)
+    
+    # Calculate utilization stats
+    total_flights = len(day_flights)
+    allocated_flights = len([f for f in gantt_data if f['resources']])
+    
+    context = {
+        'season': season,
+        'year': year,
+        'day_of_week': day_of_week.capitalize(),
+        'day_options': [d.capitalize() for d in day_masks.keys()],
+        'gantt_data': gantt_data,
+        'total_flights': total_flights,
+        'allocated_flights': allocated_flights,
+        'allocation_percentage': (allocated_flights / total_flights * 100) if total_flights > 0 else 0
+    }
+    
+    return render(request, 'reports/daily_analysis.html', context)
+
 def reports_export_excel(request):
     import openpyxl
     season = request.GET.get('season')

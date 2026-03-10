@@ -51,6 +51,7 @@
         <p style="opacity: 0.9; margin: 5px 0 0 0;">{{ season|title }} {{ year }} Season Overview</p>
     </div>
     <div class="export-buttons">
+        <a href="{% url 'daily_analysis' %}?season={{ season }}&year={{ year }}" class="btn">📊 Daily Analysis</a>
         <a href="{% url 'reports_export_excel' %}?season={{ season }}&year={{ year }}" class="btn">⬇ Export Excel</a>
         <a href="{% url 'reports_export_pdf' %}?season={{ season }}&year={{ year }}" class="btn">⬇ Export PDF</a>
     </div>
