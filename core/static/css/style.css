@@ -40,6 +40,80 @@
   --spacing-3: 0.75rem;
   --spacing-4: 1rem;
   --spacing-6: 1.5rem;
+
+  /* additional semantic colour variables */
+  --season-summer-bg: #fffbeb;
+  --season-summer-border: #fde68a;
+  --season-winter-bg: #eff6ff;
+  --season-winter-border: #bfdbfe;
+  --conflict-bg: #fff5f5;
+  --allocated-bg: #f0fdf4;
+  --row-hover-bg: #e8f4fd;
+  --handler-bg: #f3f4f6;
+  --handler-color: #4b5563;
+
+  /* colour adjustments for dark theme */
+  --warning-light: #5a3e00;
+  --success-light: #264d29;
+  --danger-light: #5e1e1e;
+}
+
+/* dark theme overrides for new variables */
+:root.dark {
+  --season-summer-bg: #3e2a0d;
+  --season-summer-border: #826100;
+  --season-winter-bg: #1a1f2b;
+  --season-winter-border: #475569;
+  --conflict-bg: #5f1e1e;
+  --allocated-bg: #1e3a2b;
+  --row-hover-bg: #264653;
+  --handler-bg: #2a2a2a;
+  --handler-color: #c0c0c0;
+
+  /* badge colours */
+  --badge-stand-bg: #e0e7ff;
+  --badge-stand-color: #3730a3;
+  --badge-gate-bg: #dcfce7;
+  --badge-gate-color: #166534;
+  --badge-checkin-bg: #fef9c3;
+  --badge-checkin-color: #854d0e;
+  --iata-bg: #f3f4f6;
+  --iata-color: #4b5563;
+  --iata-border: #d1d5db;
+}
+
+:root.dark {
+  --badge-stand-bg: #2a2547;
+  --badge-stand-color: #c5cae9;
+  --badge-gate-bg: #1a372b;
+  --badge-gate-color: #a5d6a7;
+  --badge-checkin-bg: #4a3a00;
+  --badge-checkin-color: #ffe082;
+  --iata-bg: #2a2a2a;
+  --iata-color: #c0c0c0;
+  --iata-border: #555;
+}
+
+:root.dark {
+  --badge-stand-bg: #2a2547;
+  --badge-stand-color: #c5cae9;
+  --badge-gate-bg: #1a372b;
+  --badge-gate-color: #a5d6a7;
+  --badge-checkin-bg: #4a3a00;
+  --badge-checkin-color: #ffe082;
+}
+
+/* Dark mode table tweaks */
+.dark .data-table th {
+  background: var(--gray-700);
+  color: var(--gray-300);
+  border-bottom-color: var(--gray-600);
+}
+.dark .data-table td {
+  border-bottom-color: var(--gray-600);
+}
+.dark .data-table tbody tr:hover {
+  background: var(--row-hover-bg);
 }
 
 /* ── Dark mode variables ── */
@@ -49,11 +123,11 @@
   --primary-dark: #5d99c6;
   --primary-light: #e3f2fd;
   --success: #4caf50;
-  --success-light: #a5d6a7;
+  --success-light: #264d29;
   --warning: #ffb74d;
-  --warning-light: #ffe082;
+  --warning-light: #5a3e00;
   --danger: #e57373;
-  --danger-light: #ef9a9a;
+  --danger-light: #5e1e1e;
   /* neutral/grey palette flipped for dark background */
   --gray-50: #121212;
   --gray-100: #1e1e1e;
@@ -420,13 +494,13 @@ ul {
 }
 
 .summer-card {
-  background: #fffbeb;
-  border-color: #fde68a;
+  background: var(--season-summer-bg);
+  border-color: var(--season-summer-border);
 }
 
 .winter-card {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: var(--season-winter-bg);
+  border-color: var(--season-winter-border);
 }
 
 .season-card-header {
@@ -528,8 +602,8 @@ ul {
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  background: var(--season-summer-bg);
+  border: 1px solid var(--season-summer-border);
   border-radius: var(--radius);
   padding: 16px 20px;
   font-size: 0.875rem;
@@ -687,20 +761,20 @@ ul {
 }
 
 .data-table tbody tr:hover {
-  background: var(--gray-50);
+  background: var(--row-hover-bg);
 }
 
 .data-table tbody tr.clickable-row:hover {
-  background: #e8f4fd !important;
+  background: var(--row-hover-bg) !important;
   transition: background 0.15s ease;
 }
 
 .row-conflict {
-  background: #fff5f5 !important;
+  background: var(--conflict-bg) !important;
 }
 
 .row-allocated {
-  background: #f0fdf4 !important;
+  background: var(--allocated-bg) !important;
 }
 
 /* ── Badges ── */
@@ -746,6 +820,11 @@ ul {
 .op-departure {
   background: #fff7ed;
   color: #c2410c;
+}
+
+.handler-badge {
+  background-color: var(--handler-bg);
+  color: var(--handler-color);
 }
 
 .status-badge {
@@ -809,6 +888,10 @@ ul {
   grid-template-columns: repeat(7, 1fr);
   gap: 6px;
   margin-bottom: 0;
+  /* ensure header stays aligned when container scrolls */
+  position: sticky;
+  top: 0;
+  background: inherit;
 }
 
 .days-matrix-header span {
@@ -865,18 +948,18 @@ ul {
 }
 
 .resource-stand {
-  background: #e0e7ff;
-  color: #3730a3;
+  background: var(--badge-stand-bg);
+  color: var(--badge-stand-color);
 }
 
 .resource-gate {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--badge-gate-bg);
+  color: var(--badge-gate-color);
 }
 
 .resource-checkin {
-  background: #fef9c3;
-  color: #854d0e;
+  background: var(--badge-checkin-bg);
+  color: var(--badge-checkin-color);
 }
 
 .na-badge {
@@ -1516,10 +1599,10 @@ select.form-control {
 }
 
 .iata-prefix {
-  background-color: #f3f4f6;
-  color: #4b5563;
+  background-color: var(--iata-bg);
+  color: var(--iata-color);
   padding: 0.5rem 0.75rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--iata-border);
   border-right: none;
   border-radius: 4px 0 0 4px;
   font-weight: 600;

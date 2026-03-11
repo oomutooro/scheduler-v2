@@ -152,11 +152,21 @@
         gap: var(--spacing-1);
         font-size: 0.9rem;
     }
-    
+
     .legend-color {
         width: 16px;
         height: 16px;
         border-radius: 2px;
+    }
+
+    /* common card used for charts and summaries */
+    .report-card {
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-4);
+        margin-bottom: var(--spacing-4);
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
     }
 </style>
 {% endblock %}
@@ -195,6 +205,26 @@
     </div>
 </div>
 
+<!-- additional summary metrics -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-number">{% if busiest_hour is not None %}{{ busiest_hour }}{% else %}N/A{% endif %}</div>
+        <div class="stat-label">Busiest Hour</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ stand_usage_hours|floatformat:1 }}</div>
+        <div class="stat-label">Total Stand Hours</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ gate_usage_hours|floatformat:1 }}</div>
+        <div class="stat-label">Total Gate Hours</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ checkin_usage_hours|floatformat:1 }}</div>
+        <div class="stat-label">Total Check‑in Hours</div>
+    </div>
+</div>
+
 <div class="legend">
     <div class="legend-item">
         <div class="legend-color" style="background: #4CAF50;"></div>
@@ -208,6 +238,23 @@
         <div class="legend-color" style="background: #FF9800;"></div>
         <span>Check-in Counters</span>
     </div>
+</div>
+
+<!-- charts for hourly breakdown -->
+<div class="stats-grid">
+    <div class="report-card">
+        <h3>Flights per Hour</h3>
+        <canvas id="flightsHourChart" height="100"></canvas>
+    </div>
+    <div class="report-card">
+        <h3>Resources per Hour (stacked)</h3>
+        <canvas id="resourceChart" height="100"></canvas>
+    </div>
+</div>
+
+<div class="report-card">
+    <h3>Overall Resource Hours</h3>
+    <canvas id="resourcePie" height="100"></canvas>
 </div>
 
 <div class="gantt-container">
@@ -286,6 +333,52 @@ function refreshPage() {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Could add interactive features here
+
+    const hoursLabels = Array.from({length:24}, (_, i) => `${i}:00`);
+
+    // flights per hour chart
+    new Chart(document.getElementById('flightsHourChart'), {
+        type: 'bar',
+        data: {
+            labels: hoursLabels,
+            datasets: [{
+                label: 'Flights',
+                data: {{ hourly_counts }},
+                backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                borderColor: '#3b82f6',
+                borderWidth: 1
+            }]
+        },
+        options: { scales: { y: { beginAtZero: true } } }
+    });
+
+    // stacked resource utilisation chart
+    new Chart(document.getElementById('resourceChart'), {
+        type: 'bar',
+        data: {
+            labels: hoursLabels,
+            datasets: [
+                { label: 'Stand', data: {{ hourly_stand }}, backgroundColor: '#4CAF50' },
+                { label: 'Gate', data: {{ hourly_gate }}, backgroundColor: '#2196F3' },
+                { label: 'Check-in', data: {{ hourly_checkin }}, backgroundColor: '#FF9800' }
+            ]
+        },
+        options: {
+            scales: { x: { stacked: true }, y: { beginAtZero: true, stacked: true } }
+        }
+    });
+
+    // overall resource hours pie
+    new Chart(document.getElementById('resourcePie'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Stand','Gate','Check-in'],
+            datasets: [{
+                data: {{ resource_hours }},
+                backgroundColor: ['#4CAF50','#2196F3','#FF9800']
+            }]
+        }
+    });
 });
 </script>
 {% endblock %}

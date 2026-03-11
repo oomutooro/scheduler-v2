@@ -7,7 +7,16 @@ def generate_report_data(season: str, year: int) -> dict:
     flights = FlightRequest.objects.filter(season=season, year=year)
     total_flights = flights.count()
     
-    available_seasons = list(FlightRequest.objects.values('season', 'year').distinct())
+    # clear model ordering before calling distinct so the SQL doesn't
+    # silently include an ORDER BY column (created_at) which defeats the
+    # DISTINCT clause and returns one entry per flight.  see ticket about
+    # duplicate season buttons.
+    available_seasons = list(
+        FlightRequest.objects
+            .order_by('season', 'year')
+            .values('season', 'year')
+            .distinct()
+    )
 
     if total_flights == 0:
         return {'total_flights': 0, 'season': season, 'year': year, 'available_seasons': available_seasons}
@@ -140,4 +149,168 @@ def generate_report_data(season: str, year: int) -> dict:
         'hourly_vehicles': hourly_vehicles,
         
         'overnight_flights': overnight_flights,
+    }
+
+
+def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
+    """Compute metrics to support the daily resource utilisation dashboard.
+
+    * `day_of_week` should be one of 'sunday'..'saturday' (lowercase).
+    * Returns a dictionary suitable for passing straight to the template.
+    """
+    from datetime import timedelta
+    from core.models import (
+        StandAllocation, GateAllocation, CheckInAllocation,
+        ParkingStand, Gate, CheckInCounter
+    )
+
+    # normalise day name
+    day_masks = {
+        'sunday': 1, 'monday': 2, 'tuesday': 4, 'wednesday': 8,
+        'thursday': 16, 'friday': 32, 'saturday': 64
+    }
+    if day_of_week not in day_masks:
+        day_of_week = 'monday'
+    mask = day_masks[day_of_week]
+
+    # gather flights operating on that day
+    flights = FlightRequest.objects.filter(season=season, year=year)
+    day_flights = [f for f in flights if f.days_of_operation & mask]
+    total_flights = len(day_flights)
+
+    # gather allocations for those flights, then filter by weekday of allocation date
+    flight_ids = [f.id for f in day_flights]
+    stand_allocs = StandAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request', 'stand')
+    gate_allocs = GateAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request', 'gate')
+    checkin_allocs = CheckInAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request')
+
+    dow_mapping = {'sunday': 6, 'monday': 0, 'tuesday': 1, 'wednesday': 2,
+                   'thursday': 3, 'friday': 4, 'saturday': 5}
+    target_dow = dow_mapping[day_of_week]
+
+    day_allocs_stand = [a for a in stand_allocs if a.date.weekday() == target_dow]
+    day_allocs_gate = [a for a in gate_allocs if a.date.weekday() == target_dow]
+    day_allocs_checkin = [a for a in checkin_allocs if a.date.weekday() == target_dow]
+
+    # build gantt-like data (similar to view)
+    gantt_data = []
+    for flight in day_flights:
+        flight_data = {
+            'id': flight.id,
+            'name': f"{flight.airline.iata_code} {flight.display_flight_numbers}",
+            'arrival_time': flight.arrival_time,
+            'departure_time': flight.departure_time,
+            'ground_days': flight.ground_days,
+            'resources': []
+        }
+
+        for alloc_list, rtype, color in (
+            (day_allocs_stand, 'stand', '#4CAF50'),
+            (day_allocs_gate, 'gate', '#2196F3'),
+            (day_allocs_checkin, 'checkin', '#FF9800'),
+        ):
+            alloc = next((a for a in alloc_list if a.flight_request == flight), None)
+            if alloc:
+                start_minutes = alloc.start_time.hour * 60 + alloc.start_time.minute
+                end_minutes = alloc.end_time.hour * 60 + alloc.end_time.minute
+                if end_minutes < start_minutes:
+                    end_minutes += 24 * 60
+                duration_hours = (end_minutes - start_minutes) / 60
+                left_percent = (start_minutes / (24 * 60)) * 100
+                width_percent = (duration_hours / 24) * 100
+
+                resource_name = ''
+                if rtype == 'stand':
+                    resource_name = f"Stand {alloc.stand.stand_number}"
+                elif rtype == 'gate':
+                    resource_name = f"Gate {alloc.gate.gate_number}"
+                else:
+                    resource_name = f"Counters {alloc.counter_from}-{alloc.counter_to}"
+
+                flight_data['resources'].append({
+                    'type': rtype,
+                    'resource': resource_name,
+                    'start': alloc.start_time,
+                    'end': alloc.end_time,
+                    'left_percent': left_percent,
+                    'width_percent': width_percent,
+                    'color': color
+                })
+        gantt_data.append(flight_data)
+
+    # utilisation counts per hour
+    import math
+    hourly_flight_set = {h: set() for h in range(24)}
+    hourly_stand = [0] * 24
+    hourly_gate = [0] * 24
+    hourly_checkin = [0] * 24
+
+    def mark_hours(alloc, hour_list, flight_set):
+        start = alloc.start_time.hour + alloc.start_time.minute / 60
+        end = alloc.end_time.hour + alloc.end_time.minute / 60
+        if end < start:
+            end += 24
+        for h in range(int(math.floor(start)), int(math.ceil(end))):
+            hour_list[h % 24] += 1
+            flight_set[h % 24].add(alloc.flight_request_id)
+
+    for a in day_allocs_stand:
+        mark_hours(a, hourly_stand, hourly_flight_set)
+    for a in day_allocs_gate:
+        mark_hours(a, hourly_gate, hourly_flight_set)
+    for a in day_allocs_checkin:
+        mark_hours(a, hourly_checkin, hourly_flight_set)
+
+    hourly_counts = [len(hourly_flight_set[h]) for h in range(24)]
+
+    # total resource hours
+    def duration_hours(a):
+        s = a.start_time.hour * 60 + a.start_time.minute
+        e = a.end_time.hour * 60 + a.end_time.minute
+        if e < s:
+            e += 24 * 60
+        return (e - s) / 60
+
+    stand_hours = sum(duration_hours(a) for a in day_allocs_stand)
+    gate_hours = sum(duration_hours(a) for a in day_allocs_gate)
+    checkin_hours = sum(duration_hours(a) for a in day_allocs_checkin)
+
+    total_stands = ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True).count()
+    total_gates = Gate.objects.filter(is_active=True).count()
+    total_counters = CheckInCounter.objects.filter(is_active=True).count()
+
+    # number of distinct flights with at least one resource allocated on the selected day
+    allocated_ids = set()
+    for a in day_allocs_stand + day_allocs_gate + day_allocs_checkin:
+        allocated_ids.add(a.flight_request_id)
+    allocated_flights = len(allocated_ids)
+    allocation_percentage = (allocated_flights / total_flights * 100) if total_flights > 0 else 0
+
+    busiest_hour = None
+    if hourly_counts:
+        maxcnt = max(hourly_counts)
+        if maxcnt > 0:
+            busiest_hour = hourly_counts.index(maxcnt)
+
+    return {
+        'season': season,
+        'year': year,
+        'day_of_week': day_of_week.capitalize(),
+        'day_options': [d.capitalize() for d in day_masks.keys()],
+        'gantt_data': gantt_data,
+        'total_flights': total_flights,
+        'allocated_flights': allocated_flights,
+        'allocation_percentage': allocation_percentage,
+        'hourly_counts': hourly_counts,
+        'hourly_stand': hourly_stand,
+        'hourly_gate': hourly_gate,
+        'hourly_checkin': hourly_checkin,
+        'resource_hours': [stand_hours, gate_hours, checkin_hours],
+        'total_stands': total_stands,
+        'total_gates': total_gates,
+        'total_counters': total_counters,
+        'stand_usage_hours': stand_hours,
+        'gate_usage_hours': gate_hours,
+        'checkin_usage_hours': checkin_hours,
+        'busiest_hour': busiest_hour,
     }
