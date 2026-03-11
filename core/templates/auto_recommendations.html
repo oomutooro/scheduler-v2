@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Auto-allocation Recommendations{% endblock %}
+
+{% block extra_head %}
+<style>
+    .recommendation-card {
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-4);
+        margin-bottom: var(--spacing-4);
+    }
+    .suggestions-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: var(--spacing-2);
+    }
+    .suggestions-table th,
+    .suggestions-table td {
+        padding: var(--spacing-2);
+        border: 1px solid var(--border);
+        text-align: left;
+    }
+    .suggestions-table thead {
+        background: var(--primary);
+        color: white;
+    }
+    .suggestions-table tbody tr:nth-child(even) {
+        background: var(--surface);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header-row">
+    <div>
+        <h1 class="page-title">Auto-allocation Recommendations</h1>
+        <p class="page-subtitle">Flights that could not be placed—suggested alternative times</p>
+        <p class="note"><em>Uganda Airlines flights are excluded from recommendations; only other carriers appear here.</em></p>
+    </div>
+    <a href="{% url 'season_allocations' %}?season=summer" class="btn btn-secondary btn-sm">Back to Allocations</a>
+</div>
+
+{% if not recommendations %}
+<p>No recommendations to show.</p>
+{% else %}
+    {% for rec in recommendations %}
+    <div class="recommendation-card">
+        <h3>{{ rec.flight_display }}</h3>
+        {% if rec.suggestions %}
+        <table class="suggestions-table">
+            <thead>
+                <tr>
+                    <th>Arrival</th>
+                    <th>Departure</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in rec.suggestions %}
+                <tr>
+                    <td>{{ s.arrival_time|default:'–' }}</td>
+                    <td>{{ s.departure_time|default:'–' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p><em>No alternate times could be found.</em></p>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% endif %}
+{% endblock %}

@@ -52,10 +52,6 @@
   --handler-bg: #f3f4f6;
   --handler-color: #4b5563;
 
-  /* colour adjustments for dark theme */
-  --warning-light: #5a3e00;
-  --success-light: #264d29;
-  --danger-light: #5e1e1e;
 }
 
 /* dark theme overrides for new variables */
@@ -78,6 +74,10 @@
   --badge-checkin-bg: #fef9c3;
   --badge-checkin-color: #854d0e;
   --iata-bg: #f3f4f6;
+  /* ensure success/warning/danger light are dark where needed */
+  --warning-light: #5a3e00;
+  --success-light: #264d29;
+  --danger-light: #5e1e1e;
   --iata-color: #4b5563;
   --iata-border: #d1d5db;
 }

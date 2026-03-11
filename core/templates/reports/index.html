@@ -1,9 +1,11 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Reports - Scheduler v2{% endblock %}
 
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>window.Chart||document.write('<script src="{% static "js/chart.min.js" %}"><\\/script>');</script>
 <style>
     .report-card {
         background: var(--surface-light);
@@ -99,17 +101,29 @@
 <div class="grid-2">
     <div class="report-card">
         <h3>Aircraft Mix</h3>
+        {% if size_dict %}
         <canvas id="aircraftChart"></canvas>
+        {% else %}
+        <p class="text-muted">No aircraft data available.</p>
+        {% endif %}
     </div>
     <div class="report-card">
         <h3>Operation Types</h3>
+        {% if ops_dict %}
         <canvas id="opsChart"></canvas>
+        {% else %}
+        <p class="text-muted">No operation type data available.</p>
+        {% endif %}
     </div>
 </div>
 
 <div class="report-card">
     <h3>Time-of-Day Traffic Pattern</h3>
+    {% if hourly_arrivals|length or hourly_departures|length %}
     <canvas id="todChart" height="100"></canvas>
+    {% else %}
+    <p class="text-muted">No time-of-day data available.</p>
+    {% endif %}
     
     <div class="grid-3" style="margin-top: 20px;">
         <div>
@@ -129,6 +143,9 @@
 
 <div class="report-card">
     <h3>Airline Performance (by pax volume)</h3>
+    {% if airline_chart_labels %}
+    <canvas id="airlinePerfChart" height="100" style="max-width:600px;"></canvas>
+    {% endif %}
     <table class="table">
         <thead>
             <tr>
@@ -163,83 +180,86 @@
 
 <script>
 // Aircraft Mix Chart
-new Chart(document.getElementById('aircraftChart'), {
-    type: 'doughnut',
-    data: {
-        labels: [{% for k in size_dict.keys %}'Code {{ k }}',{% endfor %}],
-        datasets: [{
-            data: [{% for v in size_dict.values %}{{ v }},{% endfor %}],
-            backgroundColor: ['#2e5bff', '#fca311', '#10b981', '#ef4444', '#8b5cf6', '#64748b']
-        }]
+(function(){
+    var labels=[{% for k in size_dict.keys %}'Code {{ k }}',{% endfor %}];
+    var data=[{% for v in size_dict.values %}{{ v }},{% endfor %}];
+    if(labels.length && data.some(function(x){return x>0;})){
+        new Chart(document.getElementById('aircraftChart'), {
+            type: 'doughnut',
+            data: {labels:labels,datasets:[{data:data,backgroundColor:['#2e5bff','#fca311','#10b981','#ef4444','#8b5cf6','#64748b']} ]}
+        });
     }
-});
+})();
 
 // Operations Chart
-new Chart(document.getElementById('opsChart'), {
-    type: 'pie',
-    data: {
-        labels: [{% for k in ops_dict.keys %}'{{ k|title }}',{% endfor %}],
-        datasets: [{
-            data: [{% for v in ops_dict.values %}{{ v }},{% endfor %}],
-            backgroundColor: ['#10b981', '#3b82f6', '#f59e0b']
-        }]
+(function(){
+    var labels=[{% for k in ops_dict.keys %}'{{ k|title }}',{% endfor %}];
+    var data=[{% for v in ops_dict.values %}{{ v }},{% endfor %}];
+    if(labels.length && data.some(function(x){return x>0;})){
+        new Chart(document.getElementById('opsChart'), {
+            type: 'pie',
+            data:{labels:labels,datasets:[{data:data,backgroundColor:['#10b981','#3b82f6','#f59e0b']}]}
+        });
     }
-});
+})();
 
 // Time of Day Traffic
-new Chart(document.getElementById('todChart'), {
-    type: 'bar',
-    data: {
-        labels: Array.from({length: 24}, (_, i) => `${i}:00`),
-        datasets: [
-            {
-                label: 'Arrivals',
-                data: {{ hourly_arrivals }},
-                backgroundColor: 'rgba(59, 130, 246, 0.5)',
-                borderColor: '#3b82f6',
-                borderWidth: 1
+(function(){
+    var arr={{ hourly_arrivals }};
+    var dep={{ hourly_departures }};
+    if(Array.isArray(arr)&&Array.isArray(dep)&& (arr.some(x=>x>0)||dep.some(x=>x>0))){
+        new Chart(document.getElementById('todChart'), {
+            type: 'bar',
+            data: {
+                labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+                datasets: [{
+                    label: 'Arrivals', data: arr,
+                    backgroundColor: 'rgba(59, 130, 246, 0.5)', borderColor: '#3b82f6', borderWidth: 1
+                },{
+                    label: 'Departures', data: dep,
+                    backgroundColor: 'rgba(245, 158, 11, 0.5)', borderColor: '#f59e0b', borderWidth: 1
+                }]
             },
-            {
-                label: 'Departures',
-                data: {{ hourly_departures }},
-                backgroundColor: 'rgba(245, 158, 11, 0.5)',
-                borderColor: '#f59e0b',
-                borderWidth: 1
-            }
-        ]
-    },
-    options: {
-        scales: { y: { beginAtZero: true, stacked: true }, x: { stacked: true } }
+            options: { scales: { y: { beginAtZero: true, stacked: true }, x: { stacked: true } } }
+        });
     }
-});
+})();
+
+// Airline performance chart
+(function(){
+    var labels={{ airline_chart_labels }};
+    var values={{ airline_chart_values }};
+    if(labels.length && values.some(x=>x>0)){
+        new Chart(document.getElementById('airlinePerfChart'), {
+            type: 'bar',
+            data: {labels:labels,datasets:[{label:'Est. pax/week',data:values,backgroundColor:'#3b82f6'}]},
+            options: { scales: { y: { beginAtZero: true } } }
+        });
+    }
+})();
 
 // Load Chart
-new Chart(document.getElementById('loadChart'), {
-    type: 'line',
-    data: {
-        labels: Array.from({length: 24}, (_, i) => `${i}:00`),
-        datasets: [
-            {
-                label: 'Estimated Passengers',
-                data: {{ hourly_pax }},
-                borderColor: '#8b5cf6',
-                tension: 0.4,
-                fill: true,
-                backgroundColor: 'rgba(139, 92, 246, 0.1)'
+(function(){
+    var pax={{ hourly_pax }};
+    var veh={{ hourly_vehicles }};
+    if(Array.isArray(pax)&&Array.isArray(veh)&& (pax.some(x=>x>0)||veh.some(x=>x>0))){
+        new Chart(document.getElementById('loadChart'), {
+            type: 'line',
+            data: {
+                labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+                datasets: [{
+                    label: 'Estimated Passengers', data: pax,
+                    borderColor: '#8b5cf6', tension: 0.4, fill: true,
+                    backgroundColor: 'rgba(139, 92, 246, 0.1)'
+                },{
+                    label: 'Est Vehicles (Toll/Park)', data: veh,
+                    borderColor: '#10b981', tension: 0.4, borderDash: [5,5]
+                }]
             },
-            {
-                label: 'Est Vehicles (Toll/Park)',
-                data: {{ hourly_vehicles }},
-                borderColor: '#10b981',
-                tension: 0.4,
-                borderDash: [5, 5]
-            }
-        ]
-    },
-    options: {
-        scales: { y: { beginAtZero: true } }
+            options: { scales: { y: { beginAtZero: true } } }
+        });
     }
-});
+})();
 </script>
 {% endif %}
 {% endblock %}

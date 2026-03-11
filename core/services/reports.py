@@ -87,6 +87,10 @@ def generate_report_data(season: str, year: int) -> dict:
     # Sort airline perf by pax
     airline_perf.sort(key=lambda x: x['weekly_pax_est'], reverse=True)
 
+    # prepare chart arrays for airline performance visualization
+    airline_chart_labels = [f"{p['code']} {p['airline']}" for p in airline_perf]
+    airline_chart_values = [p['weekly_pax_est'] for p in airline_perf]
+
     # 4. Resource Utilization & Passenger Load (Daily Estimates)
     # Estimate average daily flights
     total_weekly_freq = sum(
@@ -142,6 +146,8 @@ def generate_report_data(season: str, year: int) -> dict:
         'busiest_day': busiest_day,
         
         'airline_perf': airline_perf,
+        'airline_chart_labels': airline_chart_labels,
+        'airline_chart_values': airline_chart_values,
         
         'avg_daily_pax': avg_daily_pax,
         'avg_daily_vehicles': avg_daily_vehicles,
@@ -292,6 +298,56 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
         if maxcnt > 0:
             busiest_hour = hourly_counts.index(maxcnt)
 
+    # compute day-of-week frequency across the season (for alternative day suggestions)
+    day_counts_all = {'Sunday': 0, 'Monday': 0, 'Tuesday': 0,
+                      'Wednesday': 0, 'Thursday': 0,
+                      'Friday': 0, 'Saturday': 0}
+    for f in flights:
+        for day_name, mask_val in day_masks.items():
+            if f.days_of_operation & mask_val:
+                day_counts_all[day_name.capitalize()] += 1
+    least_busy_day = min(day_counts_all.items(), key=lambda x: x[1])[0] if day_counts_all else None
+
+    # choose busiest hour of non-home-airline flights for suggestion baseline
+    nonhome_ids = [f.id for f in day_flights if not f.airline.is_home_airline]
+    hourly_nonhome = [0] * 24
+    for h in range(24):
+        hourly_nonhome[h] = len([fid for fid in hourly_flight_set[h] if fid in nonhome_ids])
+    nonhome_busiest = None
+    if any(hourly_nonhome):
+        nonhome_busiest = hourly_nonhome.index(max(hourly_nonhome))
+
+    # pick an alternate hour based on non-home counts
+    alt_hour = None
+    if nonhome_busiest is not None:
+        alt_hour = min((h for h in range(24) if h != nonhome_busiest),
+                       key=lambda h: hourly_nonhome[h])
+
+    suggestions = []
+    home_present = any(f.airline.is_home_airline for f in day_flights)
+    if nonhome_busiest is not None and nonhome_busiest < len(hourly_flight_set):
+        # prepare a rotating list of candidate hours sorted by nonhome traffic asc
+        hour_order = sorted(range(24), key=lambda h: hourly_nonhome[h])
+        # ensure busiest hour is excluded from recommendations
+        hour_order = [h for h in hour_order if h != nonhome_busiest]
+        hour_iter = iter(hour_order)
+
+        for fid in hourly_flight_set[nonhome_busiest]:
+            flight = next((f for f in day_flights if f.id == fid), None)
+            if flight and not flight.airline.is_home_airline:
+                try:
+                    rec_hr = next(hour_iter)
+                except StopIteration:
+                    # wrap around if we run out
+                    hour_iter = iter(hour_order)
+                    rec_hr = next(hour_iter)
+                suggestions.append({
+                    'flight': f"{flight.airline.iata_code} {flight.display_flight_numbers}",
+                    'current_hour': nonhome_busiest,
+                    'recommend_hour': rec_hr,
+                    'recommend_day': least_busy_day,
+                })
+
     return {
         'season': season,
         'year': year,
@@ -313,4 +369,8 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
         'gate_usage_hours': gate_hours,
         'checkin_usage_hours': checkin_hours,
         'busiest_hour': busiest_hour,
+        'suggestions': suggestions,
+        'least_busy_day': least_busy_day,
+        'day_counts_all': day_counts_all,
+        'home_present': home_present,
     }

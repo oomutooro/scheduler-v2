@@ -145,12 +145,18 @@ def get_simultaneous_airline_flights(flight: FlightRequest, date_: date):
     return overlapping
 
 
-def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None) -> Optional[StandAllocation]:
+import random
+
+
+def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False) -> Optional[StandAllocation]:
     """
     Allocate a suitable stand for the flight on the given date.
-    For overnight flights, it creates multiple StandAllocation records (arrival night,
-    full intermediate days, departure morning) spanning the ground days, and restricts
-    to remote/extended apron parking.
+
+    * ``shuffle`` – when True the base list of stands is shuffled before
+      priorities are applied.  This allows repeated auto-allocation runs to
+      explore different assignments rather than always taking the same
+      top‑priority stand.  The default is False to preserve deterministic
+      behaviour for manual operations and tests.
     """
     actual_arrival = flight.arrival_time
     actual_departure = flight.departure_time
@@ -215,8 +221,13 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None) -> Opti
     # Build preferred stand ordering (cached)
     if alloc_cache is not None and "all_stands" not in alloc_cache:
         alloc_cache["all_stands"] = list(ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True))
-        
+        if shuffle:
+            random.shuffle(alloc_cache["all_stands"])
+    
     base_stands = alloc_cache["all_stands"] if alloc_cache is not None else list(ParkingStand.objects.filter(is_active=True, parent_stand__isnull=True))
+    if shuffle and alloc_cache is not None and "all_stands" in alloc_cache:
+        # if shuffle was requested after the cache exists, reshuffle it
+        random.shuffle(alloc_cache["all_stands"])
     
     if is_overnight:
         if flight.airline.is_home_airline:
@@ -292,7 +303,7 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None) -> Opti
     return None
 
 
-def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None) -> Optional[GateAllocation]:
+def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False) -> Optional[GateAllocation]:
     """
     Allocate a gate for the flight.
     For recurring flights, try to reuse the same gate from a previous allocation.
@@ -334,7 +345,11 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None) -> Optio
     existing = get_allocated_gates_on_date(date_, alloc_cache)
     if alloc_cache is not None and "all_gates" not in alloc_cache:
         alloc_cache["all_gates"] = list(Gate.objects.filter(is_active=True))
+        if shuffle:
+            random.shuffle(alloc_cache["all_gates"])
     all_gates = alloc_cache["all_gates"] if alloc_cache is not None else list(Gate.objects.filter(is_active=True))
+    if shuffle and alloc_cache is not None and "all_gates" in alloc_cache:
+        random.shuffle(alloc_cache["all_gates"])
 
     def gate_priority(gate):
         score = 0
@@ -351,7 +366,28 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None) -> Optio
 
     candidates = sorted(all_gates, key=gate_priority)
 
+    # determine existing stand allocation for this flight/date (if any)
+    stand_alloc = StandAllocation.objects.filter(flight_request=flight, date=date_).first()
+    stand_has_bridge = bool(stand_alloc and stand_alloc.stand.has_boarding_bridge)
+    stand_num = stand_alloc.stand.stand_number if stand_alloc else None
+
     for gate in candidates:
+        # enforce bridge rules: a gate with a boarding bridge may only be used
+        # if the assigned stand also has a bridge and the two are connected.
+        if gate.has_boarding_bridge:
+            if not stand_has_bridge:
+                # flight is not on a bridge-enabled stand – skip this gate
+                continue
+            if gate.connected_stand:
+                # gate is tied to a specific parking stand instance
+                if not stand_alloc:
+                    continue
+                if stand_alloc.stand != gate.connected_stand:
+                    # allow subdivisions of the parent stand to count as match
+                    parent = stand_alloc.stand.parent_stand if stand_alloc.stand.parent_stand else None
+                    if not parent or parent != gate.connected_stand:
+                        continue
+
         conflict = False
         for (gid, gstart, gend) in existing:
             if gid == gate.id and times_overlap(gate_open, gate_close, gstart, gend):
@@ -373,7 +409,7 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None) -> Optio
     return None
 
 
-def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None) -> Optional[CheckInAllocation]:
+def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False) -> Optional[CheckInAllocation]:
     """
     Allocate check-in counters for the flight with smart airline consolidation.
     
@@ -439,7 +475,8 @@ def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None) -> Op
             return alloc
     
     existing_allocs = get_allocated_counters_on_date(date_, alloc_cache)
-
+    if shuffle and alloc_cache is not None and "all_counters" in alloc_cache:
+        random.shuffle(alloc_cache["all_counters"])
     # Get airline's current counter usage
     airline_usage = get_airline_counter_usage_on_date(flight.airline_id, date_)
     

@@ -1283,64 +1283,128 @@ def flight_apply_resolution(request, flight_id):
 def season_allocations_auto(request):
     """
     Auto-allocate resources to selected flights using the allocation service.
+
+    This view is used when the user selects one or more flights and clicks the
+    "Auto Allocate" button.  Previously the implementation simply looped over
+    the requested dates and called the allocation helpers, leaving any existing
+    allocations in place.  That behaviour made it impossible to "refresh" an
+    allocation: once a stand/gate/check‑in had been assigned the helper would
+    never relinquish it, causing the system to repeatedly reuse the same
+    records and never explore alternative configurations.
+
+    The new behaviour below does the following:
+
+    * wipes all existing allocations for each flight at the start, ensuring we
+      always start from a clean slate; the resulting assignments may be
+      identical to the previous ones, but nothing is preserved implicitly.
+    * passes ``shuffle=True`` to the allocation helpers, which randomises the
+      ordering of candidate resources in order to explore different layouts on
+      repeated runs.
+    * when a flight cannot be allocated on *any* operating date the view
+      delegates to ``core.services.conflict_resolution.find_alternative_slots``
+      and emits a warning message containing the suggested timing shifts.  It
+      also collects those suggestions and stores them in the session; a
+      dedicated page is shown to the user so they can review and act on them.
     """
     flight_ids = request.POST.getlist('flight_ids')
     season_filter = request.POST.get('season', 'summer')
-    
+
     if not flight_ids:
         messages.warning(request, 'No flights selected.')
         return redirect(f'/allocations/?season={season_filter}')
-    
+
     from core.services.allocation import allocate_stand, allocate_gate, allocate_checkin
     from core.services.season import get_season_dates
-    
+    from core.services.conflict_resolution import find_alternative_slots
+
     success_count = 0
     error_count = 0
-    
     alloc_cache = {}
-    
+    # gather flights that failed and their slot suggestions
+    failure_suggestions = []
+
     for flight_id in flight_ids:
         try:
             flight = FlightRequest.objects.get(id=flight_id)
-            
-            # Get season dates
+
+            # clear whatever the user had before – we are rebuilding afresh
+            StandAllocation.objects.filter(flight_request=flight).delete()
+            GateAllocation.objects.filter(flight_request=flight).delete()
+            CheckInAllocation.objects.filter(flight_request=flight).delete()
+
+            # compute season span
             if flight.season == 'summer':
                 season_start, season_end = get_season_dates('summer', flight.year)
             else:
                 season_start, season_end = get_season_dates('winter', flight.year)
-            
-            # Allocate for each operating date
+
             current_date = season_start
             date_success = False
-            
+
             while current_date <= season_end:
                 if flight.operates_on_date(current_date):
-                    # Try to allocate resources for this date
-                    stand_allocated = allocate_stand(flight, current_date, alloc_cache)
-                    gate_allocated = allocate_gate(flight, current_date, alloc_cache)
-                    checkin_allocated = allocate_checkin(flight, current_date, alloc_cache)
-                    
+                    # randomise candidate order each run via shuffle=True
+                    stand_allocated = allocate_stand(flight, current_date, alloc_cache, shuffle=True)
+                    gate_allocated = allocate_gate(flight, current_date, alloc_cache, shuffle=True)
+                    checkin_allocated = allocate_checkin(flight, current_date, alloc_cache, shuffle=True)
+
                     if stand_allocated or gate_allocated or checkin_allocated:
                         date_success = True
-                
+
                 current_date += timedelta(days=1)
-            
+
             if date_success:
                 flight.status = 'allocated'
                 flight.save()
                 success_count += 1
             else:
                 error_count += 1
-        
+                # always warn about failure
+                warn_msg = f'Flight {flight.display_flight_numbers} could not be auto-allocated.'
+
+                # we generate recommendations only for non‑home (non-UR) flights
+                suggestions = []
+                if flight.airline and flight.airline.iata_code != 'UR':
+                    suggestions = find_alternative_slots(flight, max_hours_search=6, interval_mins=15)
+                    if suggestions:
+                        txt = ', '.join(
+                            f"{s['arrival_time'] or s['departure_time']}"
+                            for s in suggestions
+                        )
+                        warn_msg += f' Try times {txt}.'
+                messages.warning(request, warn_msg)
+
+                # store for the recommendation page (serialize times to strings)
+                if suggestions:
+                    serialized = []
+                    for s in suggestions:
+                        serialized.append({
+                            'arrival_time': s['arrival_time'].isoformat() if s['arrival_time'] else None,
+                            'departure_time': s['departure_time'].isoformat() if s['departure_time'] else None,
+                        })
+                    failure_suggestions.append({
+                        'flight_id': flight.id,
+                        'flight_display': flight.display_flight_numbers,
+                        'suggestions': serialized,
+                    })
         except Exception as e:
+            # record the failure for debugging and skip this flight
             error_count += 1
+            messages.warning(request, f'Auto-allocate error for {flight.display_flight_numbers}: {e}')
             continue
-    
+
     if success_count > 0:
         messages.success(request, f'Auto-allocated resources to {success_count} flight(s).')
-    if error_count > 0:
-        messages.warning(request, f'Failed to allocate {error_count} flight(s). Resources may be unavailable.')
-    
+    if error_count > 0 and success_count == 0:
+        # if all failed we already warned per-flight, but still show aggregate
+        messages.warning(request, f'Failed to allocate {error_count} flight(s).')
+
+    # store any suggestions in the session for review
+    if failure_suggestions:
+        request.session['auto_recommendations'] = failure_suggestions
+        messages.info(request, 'Some flights could not be placed; see recommendations.')
+        return redirect('auto_recommendations')
+
     return redirect(f'/allocations/?season={season_filter}')
 
 
@@ -1510,6 +1574,21 @@ def resources_view(request):
         'active_page': 'resources',
     }
     return render(request, 'resources.html', context)
+
+
+# recommendations page (see season_allocations_auto for population)
+def auto_recommendations(request):
+    """
+    Display recommendations stored in session by the bulk auto-allocation
+    routine.  The page is shown immediately after that action when flights
+    could not be placed; the session key is then cleared so the list is only
+    visible once.
+    """
+    recs = request.session.pop('auto_recommendations', [])
+    return render(request, 'auto_recommendations.html', {
+        'recommendations': recs,
+        'active_page': 'allocations',
+    })
 
 
 # ─── Reference Data Management ────────────────────────────────────────────────

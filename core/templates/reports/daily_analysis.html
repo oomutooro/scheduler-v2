@@ -1,9 +1,11 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Daily Analysis - {{ day_of_week }} - Scheduler v2{% endblock %}
 
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>window.Chart||document.write('<script src="{% static "js/chart.min.js" %}"><\\/script>');</script>
 <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
 <style>
     .analysis-header {
@@ -168,6 +170,66 @@
         margin-bottom: var(--spacing-4);
         box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
     }
+    /* keep canvas charts from blowing up */
+    .report-card canvas {
+        width: 100%;
+        max-width: 400px;
+        /* leave height alone so Chart.js can set it */
+    }
+    /* narrow card for small charts (e.g. the pie) */
+    .small-chart-card {
+        max-width: 420px;
+        margin: 0 auto;
+    }
+
+    /* suggestion table styling */
+    .suggestions-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: var(--spacing-2);
+    }
+    .suggestions-table th,
+    .suggestions-table td {
+        padding: var(--spacing-2);
+        border: 1px solid var(--border);
+        text-align: left;
+    }
+    .suggestions-table tr:nth-child(even) {
+        background: var(--surface);
+    }
+    .suggestions-table thead {
+        background: var(--primary);
+        color: white;
+    }
+    .suggestions-table th {
+        font-weight: 600;
+    }
+    .suggestions-table tbody tr:hover {
+        background: rgba(0,0,0,0.05);
+    }
+
+    /* gantt improvements */
+    .gantt-timeline {
+        max-height: 400px;
+        font-size: 0.85rem;
+    }
+    .flight-row:nth-child(odd) {
+        background: var(--surface);
+    }
+    .flight-name {
+        width: 120px;
+        padding: var(--spacing-1);
+        font-weight: 500;
+    }
+    .resource-bar {
+        border-radius: 4px;
+        color: white;
+        font-size: 0.75rem;
+        padding: 2px 4px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
 </style>
 {% endblock %}
 
@@ -252,10 +314,44 @@
     </div>
 </div>
 
-<div class="report-card">
+<div class="report-card small-chart-card">
     <h3>Overall Resource Hours</h3>
     <canvas id="resourcePie" height="100"></canvas>
 </div>
+
+{% if home_present %}
+<div class="report-card">
+    <p><em>Uganda Airlines flights are exempt from rescheduling and are treated as fixed targets. Suggestions below only apply to other carriers.</em></p>
+</div>
+{% endif %}
+
+{% if suggestions %}
+<div class="report-card">
+    <h3>Optimization Suggestions</h3>
+    <p>The busiest hour for non‑home carriers is <strong>{{ suggestions.0.current_hour }}:00</strong>.
+       To reduce congestion around Uganda Airlines, consider moving the following flights:</p>
+    <table class="suggestions-table">
+        <thead>
+            <tr>
+                <th>Flight</th>
+                <th>Current</th>
+                <th>Recommend</th>
+                <th>Other Day</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for s in suggestions %}
+            <tr>
+                <td>{{ s.flight }}</td>
+                <td>{{ s.current_hour }}:00</td>
+                <td>{{ s.recommend_hour }}:00</td>
+                <td>{% if s.recommend_day %}{{ s.recommend_day }}{% else %}&ndash;{% endif %}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 
 <div class="gantt-container">
     <h3>Resource Utilization Timeline</h3>
