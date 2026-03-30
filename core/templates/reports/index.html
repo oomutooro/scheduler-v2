@@ -1,265 +1,55 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% load static %}
 
 {% block title %}Reports - Scheduler v2{% endblock %}
 
 {% block extra_head %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>window.Chart||document.write('<script src="{% static "js/chart.min.js" %}"><\\/script>');</script>
 <style>
-    .report-card {
-        background: var(--surface-light);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: var(--spacing-4);
-        margin-bottom: var(--spacing-4);
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-    }
-    .report-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: var(--spacing-6);
+    .reports-hero {
         background: linear-gradient(135deg, var(--primary), var(--primary-light));
         padding: var(--spacing-6);
         border-radius: var(--radius);
         color: white;
+        margin-bottom: var(--spacing-6);
     }
-    .export-buttons .btn {
-        margin-left: 10px;
-        background: rgba(255, 255, 255, 0.2);
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.4);
+    .reports-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: var(--spacing-4);
     }
-    .export-buttons .btn:hover {
-        background: white;
-        color: var(--primary);
+    .report-tile {
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-5);
+        text-decoration: none;
+        color: inherit;
+        transition: box-shadow 0.2s, transform 0.2s;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
     }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-4); }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--spacing-4); }
-    .stat-number {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: var(--primary);
-        margin: 10px 0;
+    .report-tile:hover {
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        transform: translateY(-2px);
     }
+    .report-tile-icon { font-size: 2rem; margin-bottom: 4px; }
+    .report-tile h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+    .report-tile p  { margin: 0; font-size: 0.85rem; color: var(--text-muted, #666); }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="report-header">
-    <div>
-        <h1 style="color: white; margin: 0;">Reports & Analytics</h1>
-        <p style="opacity: 0.9; margin: 5px 0 0 0;">{{ season|title }} {{ year }} Season Overview</p>
-    </div>
-    <div class="export-buttons">
-        <a href="{% url 'daily_analysis' %}?season={{ season }}&year={{ year }}" class="btn">📊 Daily Analysis</a>
-        <a href="{% url 'reports_export_excel' %}?season={{ season }}&year={{ year }}" class="btn">⬇ Export Excel</a>
-        <a href="{% url 'reports_export_pdf' %}?season={{ season }}&year={{ year }}" class="btn">⬇ Export PDF</a>
-    </div>
+<div class="reports-hero">
+    <h1 style="color: white; margin: 0 0 6px 0;">Reports</h1>
+    <p style="opacity: 0.85; margin: 0;">Select a report below. More reports will be added here over time.</p>
 </div>
 
-{% if total_flights == 0 %}
-<div class="report-card" style="text-align: center; padding: 40px;">
-    <h2>No flights found for {{ season|title }} {{ year }}</h2>
-    <p class="text-muted">There is no flight data available for this season.</p>
-    
-    {% if available_seasons %}
-    <div style="margin-top: 20px;">
-        <h3>Available Seasons with Data:</h3>
-        <div style="display: flex; gap: 10px; justify-content: center; margin-top: 15px;">
-            {% for s in available_seasons %}
-            <a href="?season={{ s.season }}&year={{ s.year }}" class="btn" style="background: var(--primary); color: white; padding: 10px 20px; text-decoration: none; border-radius: var(--radius);">
-                {{ s.season|title }} {{ s.year }}
-            </a>
-            {% endfor %}
-        </div>
-    </div>
-    {% else %}
-    <p>No flights have been entered into the system yet.</p>
-    {% endif %}
+<div class="reports-grid">
+    <a href="{% url 'season_schedule' %}{% if season %}?season={{ season }}&year={{ year }}{% endif %}" class="report-tile">
+        <div class="report-tile-icon"></div>
+        <h3>Season Schedule</h3>
+        <p>Flight schedule in IATA season format  ARR/DEP rows with days-of-week, link flights and aircraft type.</p>
+    </a>
 </div>
-{% else %}
-<div class="grid-3">
-    <div class="report-card">
-        <h3>Total Flights</h3>
-        <div class="stat-number">{{ total_flights }}</div>
-        <p class="text-muted">Total distinct flights this season</p>
-    </div>
-    <div class="report-card">
-        <h3>Avg Daily Flights</h3>
-        <div class="stat-number">{{ avg_daily_flights|floatformat:1 }}</div>
-        <p class="text-muted">Based on weekly recurrences</p>
-    </div>
-    <div class="report-card">
-        <h3>Avg Daily Passengers</h3>
-        <div class="stat-number">{{ avg_daily_pax|floatformat:0 }}</div>
-        <p class="text-muted">Estimated from aircraft capacity</p>
-    </div>
-</div>
-
-<div class="grid-2">
-    <div class="report-card">
-        <h3>Aircraft Mix</h3>
-        {% if size_dict %}
-        <canvas id="aircraftChart"></canvas>
-        {% else %}
-        <p class="text-muted">No aircraft data available.</p>
-        {% endif %}
-    </div>
-    <div class="report-card">
-        <h3>Operation Types</h3>
-        {% if ops_dict %}
-        <canvas id="opsChart"></canvas>
-        {% else %}
-        <p class="text-muted">No operation type data available.</p>
-        {% endif %}
-    </div>
-</div>
-
-<div class="report-card">
-    <h3>Time-of-Day Traffic Pattern</h3>
-    {% if hourly_arrivals|length or hourly_departures|length %}
-    <canvas id="todChart" height="100"></canvas>
-    {% else %}
-    <p class="text-muted">No time-of-day data available.</p>
-    {% endif %}
-    
-    <div class="grid-3" style="margin-top: 20px;">
-        <div>
-            <strong>Busiest Day:</strong> 
-            {{ busiest_day }}
-        </div>
-        <div>
-            <strong>Peak Arrival Hour:</strong> 
-            {{ peak_arr_hour }}:00
-        </div>
-        <div>
-            <strong>Peak Departure Hour:</strong> 
-            {{ peak_dep_hour }}:00
-        </div>
-    </div>
-</div>
-
-<div class="report-card">
-    <h3>Airline Performance (by pax volume)</h3>
-    {% if airline_chart_labels %}
-    <canvas id="airlinePerfChart" height="100" style="max-width:600px;"></canvas>
-    {% endif %}
-    <table class="table">
-        <thead>
-            <tr>
-                <th>Airline</th>
-                <th>Weekly Freq</th>
-                <th>Est. Pax/Week</th>
-                <th>Fleet</th>
-                <th>Top Route</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for p in airline_perf %}
-            <tr>
-                <td>{{ p.airline }} ({{ p.code }})</td>
-                <td>{{ p.flights }}</td>
-                <td>{{ p.weekly_pax_est }}</td>
-                <td>{{ p.fleet_types|join:", " }}</td>
-                <td>{{ p.top_route }}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5" class="text-center">No data</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-
-<div class="report-card">
-    <h3>Passenger & Ground Load Estimates (Daily)</h3>
-    <p>Displays estimated passenger flow and corresponding vehicle load (assuming 30% ratio of pax to vehicles for parking/toll loads) over a 24-hour period.</p>
-    <canvas id="loadChart" height="100"></canvas>
-</div>
-
-<script>
-// Aircraft Mix Chart
-(function(){
-    var labels=[{% for k in size_dict.keys %}'Code {{ k }}',{% endfor %}];
-    var data=[{% for v in size_dict.values %}{{ v }},{% endfor %}];
-    if(labels.length && data.some(function(x){return x>0;})){
-        new Chart(document.getElementById('aircraftChart'), {
-            type: 'doughnut',
-            data: {labels:labels,datasets:[{data:data,backgroundColor:['#2e5bff','#fca311','#10b981','#ef4444','#8b5cf6','#64748b']} ]}
-        });
-    }
-})();
-
-// Operations Chart
-(function(){
-    var labels=[{% for k in ops_dict.keys %}'{{ k|title }}',{% endfor %}];
-    var data=[{% for v in ops_dict.values %}{{ v }},{% endfor %}];
-    if(labels.length && data.some(function(x){return x>0;})){
-        new Chart(document.getElementById('opsChart'), {
-            type: 'pie',
-            data:{labels:labels,datasets:[{data:data,backgroundColor:['#10b981','#3b82f6','#f59e0b']}]}
-        });
-    }
-})();
-
-// Time of Day Traffic
-(function(){
-    var arr={{ hourly_arrivals }};
-    var dep={{ hourly_departures }};
-    if(Array.isArray(arr)&&Array.isArray(dep)&& (arr.some(x=>x>0)||dep.some(x=>x>0))){
-        new Chart(document.getElementById('todChart'), {
-            type: 'bar',
-            data: {
-                labels: Array.from({length: 24}, (_, i) => `${i}:00`),
-                datasets: [{
-                    label: 'Arrivals', data: arr,
-                    backgroundColor: 'rgba(59, 130, 246, 0.5)', borderColor: '#3b82f6', borderWidth: 1
-                },{
-                    label: 'Departures', data: dep,
-                    backgroundColor: 'rgba(245, 158, 11, 0.5)', borderColor: '#f59e0b', borderWidth: 1
-                }]
-            },
-            options: { scales: { y: { beginAtZero: true, stacked: true }, x: { stacked: true } } }
-        });
-    }
-})();
-
-// Airline performance chart
-(function(){
-    var labels={{ airline_chart_labels }};
-    var values={{ airline_chart_values }};
-    if(labels.length && values.some(x=>x>0)){
-        new Chart(document.getElementById('airlinePerfChart'), {
-            type: 'bar',
-            data: {labels:labels,datasets:[{label:'Est. pax/week',data:values,backgroundColor:'#3b82f6'}]},
-            options: { scales: { y: { beginAtZero: true } } }
-        });
-    }
-})();
-
-// Load Chart
-(function(){
-    var pax={{ hourly_pax }};
-    var veh={{ hourly_vehicles }};
-    if(Array.isArray(pax)&&Array.isArray(veh)&& (pax.some(x=>x>0)||veh.some(x=>x>0))){
-        new Chart(document.getElementById('loadChart'), {
-            type: 'line',
-            data: {
-                labels: Array.from({length: 24}, (_, i) => `${i}:00`),
-                datasets: [{
-                    label: 'Estimated Passengers', data: pax,
-                    borderColor: '#8b5cf6', tension: 0.4, fill: true,
-                    backgroundColor: 'rgba(139, 92, 246, 0.1)'
-                },{
-                    label: 'Est Vehicles (Toll/Park)', data: veh,
-                    borderColor: '#10b981', tension: 0.4, borderDash: [5,5]
-                }]
-            },
-            options: { scales: { y: { beginAtZero: true } } }
-        });
-    }
-})();
-</script>
-{% endif %}
 {% endblock %}

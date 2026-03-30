@@ -28,6 +28,8 @@ def interval_minutes(t: time):
 
 def times_overlap(start1: time, end1: time, start2: time, end2: time) -> bool:
     """Check if two time intervals overlap. Handles cross-midnight."""
+    if any(t is None for t in (start1, end1, start2, end2)):
+        return False
     s1 = interval_minutes(start1)
     e1 = interval_minutes(end1)
     if e1 <= s1: e1 += 1440
@@ -148,7 +150,7 @@ def get_simultaneous_airline_flights(flight: FlightRequest, date_: date):
 import random
 
 
-def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False) -> Optional[StandAllocation]:
+def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False, all_day_flights=None) -> Optional[StandAllocation]:
     """
     Allocate a suitable stand for the flight on the given date.
 
@@ -177,6 +179,22 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
     # Check if this flight already has an allocation on another date and try to reuse it
     prev_stand_alloc, _ = find_previous_allocation_for_flight(flight, date_)
 
+    # Custom rule: If the flight has a strong preference for a specific stand 
+    # and the previous allocation was elsewhere, we might want to skip reuse to 
+    # move it to its preferred spot.
+    is_preferred_stand = False
+    if prev_stand_alloc:
+        icao = flight.airline.icao_code
+        ps_num = str(prev_stand_alloc.stand.stand_number)
+        if ps_num == '5' and icao in ('QTR', 'BEL', 'ABY', 'MSR'): is_preferred_stand = True
+        elif ps_num == '6' and icao == 'UAE': is_preferred_stand = True
+        elif flight.airline.is_home_airline and ps_num in ('7', '8', '3A'): is_preferred_stand = True
+        
+        # If not on preferred stand, only reuse if no better option exists (handled by skipping reuse here)
+        has_other_pref = icao in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE')
+        if has_other_pref and not is_preferred_stand:
+            prev_stand_alloc = None # Skip reuse to favor preference
+    
     is_overnight = flight.is_overnight
     ground_days = flight.ground_days
 
@@ -194,11 +212,25 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
         date_spans.append((date_, arrival, departure))
 
     def _check_conflict(stand_id):
+        # Find all related stands (parent and children)
+        try:
+            stand = ParkingStand.objects.get(id=stand_id)
+            related_stand_ids = [stand.id]
+            if stand.parent_stand_id:
+                related_stand_ids.append(stand.parent_stand_id)
+            # Add all sub-stands
+            related_stand_ids.extend(ParkingStand.objects.filter(parent_stand_id=stand.id).values_list('id', flat=True))
+            # If the stand has a parent, also add its siblings
+            if stand.parent_stand_id:
+                related_stand_ids.extend(ParkingStand.objects.filter(parent_stand_id=stand.parent_stand_id).exclude(id=stand.id).values_list('id', flat=True))
+        except ParkingStand.DoesNotExist:
+            related_stand_ids = [stand_id]
+
         # Must be free on all required date spans
         for d, s, e in date_spans:
             existing = get_allocated_stands_on_date(d, alloc_cache)
             for (sid, sstart, send) in existing:
-                if sid == stand_id and times_overlap(s, e, sstart, send):
+                if sid in related_stand_ids and times_overlap(s, e, sstart, send):
                     return True
         return False
 
@@ -235,7 +267,10 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
             all_stands = base_stands
             is_small_aircraft = not flight.aircraft_type.is_wide_body and flight.aircraft_type.size_code not in ('D', 'E', 'F')
             if is_small_aircraft:
-                all_stands = [s for s in all_stands if str(s.stand_number) not in ['5', '5A', '5B', '6', '6A', '6B']]
+                # Allowed to use 5/6 if it's a preferred airline, otherwise restricted
+                preferred_for_5_6 = ('QTR', 'BEL', 'ABY', 'MSR', 'UAE')
+                if flight.airline.icao_code not in preferred_for_5_6:
+                    all_stands = [s for s in all_stands if str(s.stand_number) not in ['5', '5A', '5B', '6', '6A', '6B']]
         elif flight.aircraft_type.is_wide_body or flight.aircraft_type.size_code in ('D', 'E', 'F'):
             all_stands = base_stands
         else:
@@ -245,13 +280,18 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
 
     def stand_priority(stand):
         score = 0
-        airline_code = flight.airline.iata_code
+        airline_icao = flight.airline.icao_code
+        airline_iata = flight.airline.iata_code
 
-        # Stand specific preferences
-        if airline_code in ('BEL', 'QTR', 'ABY') and str(stand.stand_number) == '5':
-            score += 1000
-        elif airline_code == 'UAE' and str(stand.stand_number) == '6':
-            score += 1000
+        # Stand specific preferences (source of truth: USER instructions)
+        # Stand 5: QTR, BEL, ABY, MSR
+        # Stand 6: UAE (Emirates)
+        if str(stand.stand_number) == '5':
+            if airline_icao in ('QTR', 'BEL', 'ABY', 'MSR'):
+                score += 2000
+        elif str(stand.stand_number) == '6':
+            if airline_icao == 'UAE':
+                score += 2000
             
         # Uganda Airlines small aircraft usually prefer stands 7 and 8
         is_small_aircraft = not flight.aircraft_type.is_wide_body and flight.aircraft_type.size_code not in ('D', 'E', 'F')
@@ -261,9 +301,13 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
                 
         # Bridge preferences
         bridge_preferred_airlines = ('ABY', 'QTR', 'UAE', 'FDB', 'THY', 'MSR', 'RWD', 'BEL', 'KLM')
-        if airline_code in bridge_preferred_airlines:
+        if airline_iata in bridge_preferred_airlines:
             if stand.has_boarding_bridge:
                 score += 500
+
+        # Code C Bridge Priority: Encourage smaller jets to use bridges if available
+        if flight.aircraft_type.size_code == 'C' and stand.has_boarding_bridge:
+            score += 300
 
         if flight.aircraft_type.is_wide_body:
             if stand.has_boarding_bridge:
@@ -271,15 +315,52 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
             if stand.size_code in ('E', 'F'):
                 score += 50
         else:
-            if airline_code not in bridge_preferred_airlines and not stand.has_boarding_bridge:
+            if airline_iata not in bridge_preferred_airlines and not stand.has_boarding_bridge:
                 score += 20
         if stand.is_remote and not is_overnight:
             score -= 10
         return -score
 
+    # Future-awareness: if a stand is preferred by a LATER flight that overlaps with us,
+    # penalize it for the current flight to "reserve" it.
+    def get_future_penalty(stand):
+        if not all_day_flights: return 0
+        penalty = 0
+        current_arrival = flight.arrival_time or flight.departure_time
+        
+        for future_f in all_day_flights:
+            if future_f.id == flight.id: continue
+            
+            # Use same logic as allocate_stand to determine future flight's occupancy
+            f_arr_orig = future_f.arrival_time
+            f_dep_orig = future_f.departure_time
+            if future_f.operation_type == 'arrival' and f_arr_orig:
+                f_s, f_e = f_arr_orig, time_add_minutes(f_arr_orig, 90)
+            elif future_f.operation_type == 'departure' and f_dep_orig:
+                f_s, f_e = time_subtract_minutes(f_dep_orig, 90), f_dep_orig
+            else:
+                f_s, f_e = f_arr_orig or f_dep_orig, f_dep_orig or f_arr_orig
+
+            if not f_s or not f_e: continue
+            
+            # We only care about flights arriving around or after us
+            if f_s < (current_arrival or time(0,0)):
+                continue
+            
+            # If they overlap
+            if times_overlap(arrival, departure, f_s, f_e):
+                # Check if future flight has a high preference for this stand
+                f_icao = future_f.airline.icao_code
+                s_num = str(stand.stand_number)
+                if s_num == '5' and f_icao in ('QTR', 'BEL', 'ABY', 'MSR'): 
+                    penalty += 3000
+                elif s_num == '6' and f_icao == 'UAE':
+                    penalty += 3000
+        return penalty
+
     candidates = sorted(
         [s for s in all_stands if s.can_accommodate(flight.aircraft_type)],
-        key=stand_priority
+        key=lambda s: stand_priority(s) + get_future_penalty(s)
     )
 
     for stand in candidates:
@@ -354,6 +435,15 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
     def gate_priority(gate):
         score = 0
         
+        # Preferred gates (source of truth: USER instructions)
+        # Stand 5 -> Gate 2B
+        # Stand 6 -> Gate 4
+        airline_icao = flight.airline.icao_code
+        if str(gate.gate_number) == '2B' and airline_icao in ('QTR', 'BEL', 'ABY', 'MSR'):
+            score += 2000
+        elif str(gate.gate_number) == '4' and airline_icao == 'UAE':
+            score += 2000
+
         # Uganda Airlines prefers Gate 3A except for LGW flights
         if flight.airline.is_home_airline:
             dest_code = flight.destination.iata_code if flight.destination else None
@@ -409,17 +499,26 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
     return None
 
 
-def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False) -> Optional[CheckInAllocation]:
+def get_ground_handlers_map():
+    """Build a mapping of Airline ID -> GroundHandler object."""
+    from core.models import GroundHandler
+    handlers = GroundHandler.objects.prefetch_related('airlines').all()
+    h_map = {}
+    for h in handlers:
+        for airline in h.airlines.all():
+            h_map[airline.id] = h
+    return h_map
+
+
+def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False, all_day_flights=None) -> Optional[CheckInAllocation]:
     """
-    Allocate check-in counters for the flight with smart airline consolidation.
+    Allocate check-in counters with handler-aware look-ahead.
     
     Rules:
-    1. If another flight from the same airline is checking in at the same time,
-       they share the same counter block (don't allocate separate blocks).
-    2. An airline can get max 1-2 additional counters per day beyond their standard allocation.
-    3. Wide-body: 3 hours check-in, 5-7 counters; start with min 4
-    4. Narrow/regional: 2 hours check-in, 3-4 counters; start with min 2
-    5. Counters 1-4 prioritized for Uganda Airlines (home airline)
+    1. Consolidation: Same airline shares counter blocks.
+    2. Handler Transition: Flights with SAME handler can have a 45-min overlap 
+       at the counters to facilitate smooth handover.
+    3. Look-Ahead: Penalize counter blocks needed by future high-priority flights.
     """
     if flight.operation_type == 'arrival':
         return None  # Arrival-only flights don't use check-in
@@ -501,50 +600,90 @@ def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuff
     if len(airline_counters_in_use) >= max_airline_counters:
         return None
     
+    # Sort counter preference
+    if is_home:
+        # Home airline blocks 1-4 first
+        preferred_starts = list(range(1, 23)) 
+    else:
+        # Others start from 5
+        preferred_starts = list(range(5, 23)) + list(range(1, 5))
+
     # Find contiguous block of free counters
     def is_counter_free(counter_num, start, end):
+        h_map = alloc_cache.get('handlers_map') if alloc_cache else get_ground_handlers_map()
+        my_handler = h_map.get(flight.airline_id)
+        
         for alloc in existing_allocs:
             if alloc.counter_from <= counter_num <= alloc.counter_to:
+                # Check for overlap
                 if times_overlap(start, end, alloc.start_time, alloc.end_time):
+                    # Exception: If same handler, allow a 45-min "soft" overlap
+                    other_handler = h_map.get(alloc.flight_request.airline_id)
+                    if my_handler and other_handler and my_handler.id == other_handler.id:
+                        # Calculate overlap duration
+                        s_max = max(interval_minutes(start), interval_minutes(alloc.start_time))
+                        e_min = min(interval_minutes(end), interval_minutes(alloc.end_time))
+                        overlap_dur = e_min - s_max
+                        if overlap_dur <= 45:
+                            continue # Allow this specific overlap
                     return False
         return True
 
-    # Sort counter preference
-    if is_home:
-        preferred = list(range(1, 5)) + list(range(5, 23))
-    else:
-        preferred = list(range(5, 23)) + list(range(1, 5))
+    # Future-awareness for counters
+    def get_future_counter_penalty(start_c, end_c):
+        if not all_day_flights: return 0
+        penalty = 0
+        for future_f in all_day_flights:
+            if future_f.id == flight.id or future_f.operation_type == 'arrival':
+                continue
+            
+            f_dep = future_f.departure_time
+            if not f_dep: continue
+            f_close = time_subtract_minutes(f_dep, 60)
+            f_open = time_subtract_minutes(f_close, future_f.checkin_duration_hours * 60)
+            
+            if times_overlap(checkin_open, checkin_close, f_open, f_close):
+                # If high priority airline needs these counters
+                if future_f.airline.icao_code in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE'):
+                    penalty += 1000
+        return penalty
 
     # Find first contiguous block of num_counters_needed free counters
-    for start_counter in preferred:
+    potential_blocks = []
+    for start_counter in preferred_starts:
         end_counter = start_counter + num_counters_needed - 1
-        if end_counter > 22:
-            continue
+        if end_counter > 22: continue
         
         # Check if this block would exceed airline's max usage
         new_counters = set(range(start_counter, end_counter + 1))
         total_after = len(airline_counters_in_use | new_counters)
         if total_after > max_airline_counters:
             continue
-        
-        # Check entire block is free
-        block_free = all(
-            is_counter_free(c, checkin_open, checkin_close)
-            for c in range(start_counter, end_counter + 1)
-        )
+            
+        block_free = all(is_counter_free(c, checkin_open, checkin_close) for c in range(start_counter, end_counter + 1))
         if block_free:
-            alloc = CheckInAllocation(
-                flight_request=flight,
-                counter_from=start_counter,
-                counter_to=end_counter,
-                date=date_,
-                start_time=checkin_open,
-                end_time=checkin_close,
-            )
-            alloc.save()
-            if alloc_cache is not None:
-                alloc_cache.setdefault(f"checkin_{date_}", []).append(alloc)
-            return alloc
+            penalty = get_future_counter_penalty(start_counter, end_counter)
+            potential_blocks.append((start_counter, end_counter, penalty))
+            
+    if not potential_blocks:
+        return None
+        
+    # Pick block with lowest penalty (and then lowest counter number)
+    potential_blocks.sort(key=lambda x: (x[2], x[0]))
+    best_start, best_end, _ = potential_blocks[0]
+    
+    alloc = CheckInAllocation(
+        flight_request=flight,
+        counter_from=best_start,
+        counter_to=best_end,
+        date=date_,
+        start_time=checkin_open,
+        end_time=checkin_close,
+    )
+    alloc.save()
+    if alloc_cache is not None:
+        alloc_cache.setdefault(f"checkin_{date_}", []).append(alloc)
+    return alloc
 
     return None  # No counters available
 
@@ -561,6 +700,19 @@ def allocate_resources_for_date(date_: date, alloc_cache=None) -> dict:
         season=season, year=year, status__in=['pending', 'conflict']
     ).select_related('airline', 'aircraft_type')
 
+    # Sort flights by "Preference Priority" then by Time.
+    # This ensures high-preference flights (EK, QR, etc.) get first pick of their stands,
+    # effectively "reserving" them even if they arrive later in the day.
+    def flight_priority_key(f):
+        p_val = 0
+        if f.airline.icao_code in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE'):
+            p_val = 2
+        elif f.airline.is_home_airline:
+            p_val = 1
+        return (-p_val, f.arrival_time or time(0,0))
+    
+    flights = sorted(list(flights), key=flight_priority_key)
+
     results = {'allocated': 0, 'conflicts': 0, 'skipped': 0}
 
     for flight in flights:
@@ -568,20 +720,54 @@ def allocate_resources_for_date(date_: date, alloc_cache=None) -> dict:
             results['skipped'] += 1
             continue
 
-        # Skip if already allocated for this date
-        already_stand = StandAllocation.objects.filter(flight_request=flight, date=date_).exists()
-        if already_stand:
-            results['allocated'] += 1
-            continue
-
-        stand = allocate_stand(flight, date_, alloc_cache)
+        # Run allocations
+        # These functions have internal "already allocated" checks
+        stand = allocate_stand(flight, date_, alloc_cache, all_day_flights=flights)
         gate = allocate_gate(flight, date_, alloc_cache)
-        checkin = allocate_checkin(flight, date_, alloc_cache)
+        checkin = allocate_checkin(flight, date_, alloc_cache, all_day_flights=flights)
 
-        if stand or gate or checkin:
+        # Determine if the flight was successfully allocated or already had allocations
+        # A flight is considered 'allocated' if any new allocation was made,
+        # or if all relevant allocations (stand, gate, checkin) already existed.
+        
+        # Check if any new allocation was made
+        new_allocation_made = bool(stand or gate or checkin)
+
+        # Check if allocations already existed (if no new ones were made)
+        # We check for existence of StandAllocation as a proxy for overall allocation status
+        # because StandAllocation is the most complex and critical.
+        # The sub-functions (allocate_stand, allocate_gate, allocate_checkin)
+        # will return None if an allocation already exists for that specific resource.
+        # So, if all three return None, it means either they all already existed,
+        # or they couldn't be allocated.
+        
+        # To differentiate, we explicitly check if a StandAllocation exists.
+        # If it exists, we assume the flight was already handled for this date.
+        stand_already_exists = StandAllocation.objects.filter(flight_request=flight, date=date_).exists()
+        gate_already_exists = GateAllocation.objects.filter(flight_request=flight, date=date_).exists()
+        checkin_already_exists = CheckInAllocation.objects.filter(flight_request=flight, date=date_).exists()
+
+        # A flight is considered 'allocated' if:
+        # 1. A new allocation was successfully made for any resource (stand, gate, or checkin).
+        # OR
+        # 2. All relevant resources (stand, gate, checkin) already had allocations.
+        #    (We simplify this by checking if stand_already_exists is true,
+        #     as stand allocation is usually the primary one and implies others might also exist or be handled.)
+        
+        # Refined logic:
+        # If any new allocation was made, it's allocated.
+        # Else, if all three (stand, gate, checkin) already existed, it's allocated.
+        # Else, it's a conflict.
+
+        if new_allocation_made:
+            results['allocated'] += 1
+            flight.status = 'allocated'
+        elif stand_already_exists and gate_already_exists and checkin_already_exists:
+            # All three already existed, so count as allocated
             results['allocated'] += 1
             flight.status = 'allocated'
         else:
+            # No new allocation, and not all existing allocations found (or none at all)
             results['conflicts'] += 1
             flight.status = 'conflict'
         flight.save()
@@ -644,7 +830,7 @@ def allocate_resources_for_flight(flight: FlightRequest, alloc_cache=None) -> di
         # Gate and check-in are always allocated on the departure date.
         departure_date = current + flight.departure_date_offset
         gate = allocate_gate(flight, departure_date, alloc_cache)
-        checkin = allocate_checkin(flight, departure_date, alloc_cache)
+        checkin = allocate_checkin(flight, departure_date, alloc_cache, all_day_flights=[flight]) # Minimal list for single flight
 
         if stand or gate or checkin:
             results['allocated'] += 1

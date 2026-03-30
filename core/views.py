@@ -1830,9 +1830,281 @@ def reports_dashboard(request):
     season, year, _, _ = get_current_season()
     season = request.GET.get('season', season)
     year = int(request.GET.get('year', year))
-    
-    data = generate_report_data(season, year)
-    return render(request, 'reports/index.html', data)
+    return render(request, 'reports/index.html', {
+        'season': season,
+        'year': year,
+        'active_page': 'reports',
+    })
+
+
+def _build_season_schedule_rows(season, year):
+    """Build the list of row dicts for the season schedule table / Excel export."""
+    from core.services.season import get_season_dates
+    season_start, season_end = get_season_dates(season, year)
+
+    flights = (
+        FlightRequest.objects
+        .filter(season=season, year=year)
+        .select_related('airline', 'aircraft_type', 'origin', 'destination')
+        .order_by('airline__iata_code', 'arrival_flight_number', 'departure_flight_number')
+    )
+
+    day_order = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+    rows = []
+
+    for flight in flights:
+        start_date = flight.valid_from or season_start
+        end_date   = flight.valid_to   or season_end
+
+        days = {
+            day: ('Y' if (flight.days_of_operation & DAY_MASK[day]) else '-')
+            for day in day_order
+        }
+
+        is_home = flight.airline.is_home_airline
+
+        # ── Arrival row ──────────────────────────────────────────────────────
+        if flight.operation_type in ('arrival', 'turnaround'):
+            rows.append({
+                'arr_dep':       'A',
+                'start_date':    start_date.strftime('%Y.%m.%d'),
+                'end_date':      end_date.strftime('%Y.%m.%d'),
+                'operator':      flight.airline.iata_code,
+                'flight_no':     flight.arrival_flight_number,
+                'acft_type':     flight.aircraft_type.code,
+                'time':          flight.arrival_time.strftime('%H:%M') if flight.arrival_time else '',
+                'from_iata':     flight.origin.iata_code if flight.origin else '',
+                'from_icao':     (flight.origin.icao_code or '') if flight.origin else '',
+                'days':          days,
+                'irregular':     '',
+                'dom_int':       'I',
+                'link_flight':   flight.departure_flight_number if not is_home else '',
+                'link_day':      flight.ground_days,
+                'codeshare':     '',
+                'master_flight': '',
+                'service_type':  'J',
+                'remark':        flight.airline.name,
+            })
+
+        # ── Departure row ────────────────────────────────────────────────────
+        if flight.operation_type in ('departure', 'turnaround'):
+            rows.append({
+                'arr_dep':       'D',
+                'start_date':    start_date.strftime('%Y.%m.%d'),
+                'end_date':      end_date.strftime('%Y.%m.%d'),
+                'operator':      flight.airline.iata_code,
+                'flight_no':     flight.departure_flight_number,
+                'acft_type':     flight.aircraft_type.code,
+                'time':          flight.departure_time.strftime('%H:%M') if flight.departure_time else '',
+                'from_iata':     flight.destination.iata_code if flight.destination else '',
+                'from_icao':     (flight.destination.icao_code or '') if flight.destination else '',
+                'days':          days,
+                'irregular':     '',
+                'dom_int':       'I',
+                'link_flight':   flight.arrival_flight_number if not is_home else '',
+                'link_day':      flight.ground_days,
+                'codeshare':     '',
+                'master_flight': '',
+                'service_type':  'J',
+                'remark':        flight.airline.name,
+            })
+
+    return rows
+
+
+def season_schedule_view(request):
+    season, year, _, _ = get_current_season()
+    season = request.GET.get('season', season)
+    year   = int(request.GET.get('year', year))
+
+    available_seasons = list(
+        FlightRequest.objects
+        .order_by('season', 'year')
+        .values('season', 'year')
+        .distinct()
+    )
+
+    rows = _build_season_schedule_rows(season, year)
+
+    return render(request, 'reports/season_schedule.html', {
+        'rows':              rows,
+        'season':            season,
+        'year':              year,
+        'available_seasons': available_seasons,
+        'active_page':       'reports',
+    })
+
+
+def season_schedule_export_excel(request):
+    """Export in SEASON-IMPORT column format while keeping A/D rows separate."""
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from core.services.season import get_season_dates
+
+    season = request.GET.get('season', 'summer')
+    year   = int(request.GET.get('year', 2026))
+    rows = _build_season_schedule_rows(season, year)
+
+    season_start, season_end = get_season_dates(season, year)
+    season_code = ('S' if season == 'summer' else 'W') + str(year)
+
+    airlines_by_iata = {
+        a.iata_code: a for a in Airline.objects.all().only('iata_code', 'icao_code')
+    }
+
+    def to_yyyymmdd(v):
+        # rows currently carry dates as YYYY.MM.DD
+        if not v:
+            return ''
+        return str(v).replace('.', '')
+
+    def to_hhmm_with_space(v):
+        # rows currently carry times as HH:MM
+        if not v:
+            return ''
+        return str(v).replace(':', ' ')
+
+    def flight_with_space(operator_iata, flight_no):
+        no = (flight_no or '').strip()
+        if not no:
+            return ''
+        op = (operator_iata or '').strip().upper()
+        if op and no.upper().startswith(op):
+            return f"{op} {no[len(op):]}"
+        return no
+
+    def acft_iata_code(icao_code):
+        code = (icao_code or '').strip()
+        if not code:
+            return ''
+        # Example: B788 -> 788, A332 -> 332, DH8C -> H8C
+        return code[1:] if len(code) > 1 else code
+
+    # ── Build workbook ────────────────────────────────────────────────────────
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = season_code
+
+    # Row 1: short template column codes (exact order from SEASON-IMPORT)
+    ws.append([
+        'ARP', 'TER', 'SSC', 'FSD', 'FED', 'FLT', 'FLO', 'ORG', 'STA',
+        'TYA', 'TYS', 'TYC', 'DES', 'STD', 'LKT', 'LKD',
+        'SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT',
+        'IRR', 'FST', 'TRA', 'RMK',
+    ])
+
+    # Row 2: long template labels (exact wording from sample file)
+    ws.append([
+        '*Service Airport \nIATA Code',
+        '*Terminal No',
+        '*Season Code',
+        '*Season \nStart Date\n(YYYYMMDD)',
+        '*Season \nEnd Date\n(YYYYMMDD)',
+        '*Flight IATA Code\n(AA 123)\n',
+        'Flight Airline ICAO Code',
+        '*Origin\nAirport \nIATA code',
+        '*Scheduled \nArrival Time\n(hhmm)',
+        '*Aircraft IATA Type code\n',
+        '*Aircraft IATA Subtype code\n',
+        '*Aircraft ICAO Type code\n',
+        'Destination\nAirport \nIATA code\n(Required if there is a link flight)',
+        'Scheduled\nDeparture Time\n(hhmm)\n(Required if there is a link flight)',
+        'Link Flight IATA Code\n(AA 123)\n(Required if there is a link flight)',
+        'Link Days',
+        '*Y/N', '*Y/N', '*Y/N', '*Y/N', '*Y/N', '*Y/N', '*Y/N',
+        '*Y/N',
+        '*Service Type\n(A~Z)',
+        'Transfer \nY/N',
+        'Remark',
+    ])
+
+    thin = Border(
+        left=Side(style='thin', color='B0C8D4'),
+        right=Side(style='thin', color='B0C8D4'),
+        top=Side(style='thin', color='B0C8D4'),
+        bottom=Side(style='thin', color='B0C8D4'),
+    )
+    for cell in ws[1]:
+        cell.fill = PatternFill('solid', fgColor='1A6E8E')
+        cell.font = Font(bold=True, color='FFFFFF', size=9)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin
+    ws.row_dimensions[1].height = 20
+
+    for cell in ws[2]:
+        cell.fill = PatternFill('solid', fgColor='2C8FAA')
+        cell.font = Font(bold=False, color='FFFFFF', size=7)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = thin
+    ws.row_dimensions[2].height = 52
+
+    fill_odd  = PatternFill('solid', fgColor='E8F4F8')
+    fill_even = PatternFill('solid', fgColor='FFFFFF')
+    for idx, row in enumerate(rows, start=3):
+        operator = row['operator']
+        airline = airlines_by_iata.get(operator)
+        flo = airline.icao_code if airline else ''
+
+        start_val = to_yyyymmdd(row['start_date']) or season_start.strftime('%Y%m%d')
+        end_val = to_yyyymmdd(row['end_date']) or season_end.strftime('%Y%m%d')
+
+        acft_icao = row['acft_type']
+        acft_iata = acft_iata_code(acft_icao)
+
+        ws.append([
+            'EBB',
+            'T01',
+            season_code,
+            start_val,
+            end_val,
+            flight_with_space(operator, row['flight_no']),
+            flo,
+            row['from_iata'],
+            to_hhmm_with_space(row['time']),
+            acft_iata,
+            acft_iata,
+            acft_icao,
+            row['from_iata'] if row['arr_dep'] == 'D' else row['from_iata'],
+            to_hhmm_with_space(row['time']) if row['arr_dep'] == 'D' else '',
+            flight_with_space(operator, row['link_flight']),
+            row['link_day'],
+            row['days']['sunday'],
+            row['days']['monday'],
+            row['days']['tuesday'],
+            row['days']['wednesday'],
+            row['days']['thursday'],
+            row['days']['friday'],
+            row['days']['saturday'],
+            row['irregular'],
+            row['service_type'],
+            row['codeshare'],
+            row['remark'],
+        ])
+
+        fill = fill_odd if idx % 2 == 0 else fill_even
+        for col_i, cell in enumerate(ws[idx], start=1):
+            cell.fill  = fill
+            cell.border = thin
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.font = Font(size=9, bold=True) if col_i in (6, 7) else Font(size=9)
+
+        ws.row_dimensions[idx].height = 15
+
+    for i, w in enumerate(
+        [7, 6, 8, 11, 11, 11, 7, 7, 9, 7, 7, 9, 9, 9, 12, 8, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 22],
+        start=1
+    ):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    ws.freeze_panes = 'A3'
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="SEASON-IMPORT_{season_code}.xlsx"'
+    wb.save(response)
+    return response
 
 def daily_analysis(request):
     season, year, _, _ = get_current_season()

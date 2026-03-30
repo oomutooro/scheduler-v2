@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Season Schedule — Entebbe Airport Slotting System{% endblock %}
+
+{% block extra_head %}
+<style>
+    .ss-page-header {
+        background: linear-gradient(135deg, var(--primary), var(--primary-light));
+        padding: var(--spacing-6);
+        border-radius: var(--radius);
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: var(--spacing-4);
+        gap: var(--spacing-4);
+        flex-wrap: wrap;
+    }
+    .ss-page-header h1 { margin: 0; color: white; font-size: 1.5rem; }
+    .ss-page-header p  { margin: 4px 0 0 0; opacity: 0.85; font-size: 0.9rem; }
+    .ss-actions { display: flex; gap: 10px; flex-shrink: 0; }
+    .ss-actions .btn-white {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.4);
+        padding: 8px 16px;
+        border-radius: var(--radius);
+        text-decoration: none;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: background 0.15s;
+        display: inline-flex; align-items: center; gap: 6px;
+    }
+    .ss-actions .btn-white:hover {
+        background: white;
+        color: var(--primary);
+    }
+    .ss-filter-bar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px 16px;
+        margin-bottom: var(--spacing-4);
+        flex-wrap: wrap;
+    }
+    .ss-filter-bar label { font-size: 0.85rem; font-weight: 500; color: var(--text-muted, #666); }
+    .ss-filter-bar select, .ss-filter-bar input {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 0.875rem;
+        background: var(--surface);
+        color: var(--text);
+    }
+    .ss-filter-bar .btn-apply {
+        background: var(--primary);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 7px 18px;
+        font-size: 0.875rem;
+        cursor: pointer;
+        font-weight: 500;
+    }
+    .ss-table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    }
+    .ss-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.78rem;
+        white-space: nowrap;
+        min-width: 1600px;
+    }
+    .ss-table thead tr {
+        background: #1a6e8e;
+        color: white;
+    }
+    .ss-table thead th {
+        padding: 7px 9px;
+        text-align: center;
+        font-weight: 600;
+        border-right: 1px solid rgba(255,255,255,0.15);
+        font-size: 0.73rem;
+        letter-spacing: 0.03em;
+    }
+    .ss-table tbody tr:nth-child(odd)  { background: #e8f4f8; }
+    .ss-table tbody tr:nth-child(even) { background: #ffffff; }
+    .ss-table tbody tr:hover { background: #cce8f4; }
+    .ss-table td {
+        padding: 5px 9px;
+        border-right: 1px solid #d0dde5;
+        border-bottom: 1px solid #d8e8f0;
+        text-align: center;
+        color: #1a2533;
+    }
+    .ss-table td:last-child, .ss-table th:last-child { border-right: none; }
+    .badge-A {
+        display: inline-block;
+        background: #1a8c58;
+        color: white;
+        font-weight: 700;
+        border-radius: 4px;
+        padding: 1px 7px;
+        font-size: 0.75rem;
+    }
+    .badge-D {
+        display: inline-block;
+        background: #c94a4a;
+        color: white;
+        font-weight: 700;
+        border-radius: 4px;
+        padding: 1px 7px;
+        font-size: 0.75rem;
+    }
+    .day-y   { color: #1a6e8e; font-weight: 700; }
+    .day-dash { color: #afc8d4; }
+    .ss-empty {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--text-muted, #666);
+    }
+    .ss-count-badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.25);
+        border-radius: 20px;
+        padding: 2px 12px;
+        font-size: 0.8rem;
+        margin-left: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ss-page-header">
+    <div>
+        <h1>
+            Season Schedule
+            <span class="ss-count-badge">{{ rows|length }} row{{ rows|length|pluralize }}</span>
+        </h1>
+        <p>{{ season|title }} {{ year }} — IATA-format flight schedule</p>
+    </div>
+    <div class="ss-actions">
+        <a href="{% url 'season_schedule_excel' %}?season={{ season }}&year={{ year }}" class="btn-white">
+            ⬇ Export Excel
+        </a>
+        <a href="{% url 'reports' %}" class="btn-white">← Back to Reports</a>
+    </div>
+</div>
+
+{# ── Season / Year filter ── #}
+<form method="get" class="ss-filter-bar">
+    <label for="id_season">Season</label>
+    <select name="season" id="id_season">
+        {% for s in available_seasons %}
+        <option value="{{ s.season }}" {% if s.season == season %}selected{% endif %}>{{ s.season|title }} {{ s.year }}</option>
+        {% endfor %}
+    </select>
+    <label for="id_year">Year</label>
+    <input type="number" name="year" id="id_year" value="{{ year }}" min="2020" max="2099" style="width:80px;">
+    <button type="submit" class="btn-apply">Apply</button>
+</form>
+
+{% if rows %}
+<div class="ss-table-wrap">
+<table class="ss-table">
+    <thead>
+        <tr>
+            <th>ARR/DEP</th>
+            <th>Start Date</th>
+            <th>End Date</th>
+            <th>Operator</th>
+            <th>Flight No</th>
+            <th>Aircraft Type</th>
+            <th>ST(A/D)</th>
+            <th>From</th>
+            <th>To</th>
+            <th>SUN</th>
+            <th>MON</th>
+            <th>TUE</th>
+            <th>WED</th>
+            <th>THU</th>
+            <th>FRI</th>
+            <th>SAT</th>
+            <th>Irregular</th>
+            <th>DOM/INT</th>
+            <th>Link Flight</th>
+            <th>Link Day</th>
+            <th>CodeShare</th>
+            <th>Master Flight</th>
+            <th>Service Type</th>
+            <th>Remark</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr>
+            <td><span class="badge-{{ row.arr_dep }}">{{ row.arr_dep }}</span></td>
+            <td>{{ row.start_date }}</td>
+            <td>{{ row.end_date }}</td>
+            <td><strong>{{ row.operator }}</strong></td>
+            <td><strong>{{ row.flight_no }}</strong></td>
+            <td>{{ row.acft_type }}</td>
+            <td>{{ row.time }}</td>
+            <td>{{ row.from_iata }}</td>
+            <td>{{ row.from_icao }}</td>
+            <td class="{% if row.days.sunday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.sunday }}</td>
+            <td class="{% if row.days.monday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.monday }}</td>
+            <td class="{% if row.days.tuesday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.tuesday }}</td>
+            <td class="{% if row.days.wednesday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.wednesday }}</td>
+            <td class="{% if row.days.thursday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.thursday }}</td>
+            <td class="{% if row.days.friday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.friday }}</td>
+            <td class="{% if row.days.saturday == 'Y' %}day-y{% else %}day-dash{% endif %}">{{ row.days.saturday }}</td>
+            <td>{{ row.irregular }}</td>
+            <td>{{ row.dom_int }}</td>
+            <td>{{ row.link_flight }}</td>
+            <td>{{ row.link_day }}</td>
+            <td>{{ row.codeshare }}</td>
+            <td>{{ row.master_flight }}</td>
+            <td>{{ row.service_type }}</td>
+            <td>{{ row.remark }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<div class="ss-empty">
+    <p style="font-size: 1.1rem; font-weight: 500; margin-bottom: 8px;">No flights found for {{ season|title }} {{ year }}.</p>
+    <p>Try selecting a different season above.</p>
+</div>
+{% endif %}
+{% endblock %}

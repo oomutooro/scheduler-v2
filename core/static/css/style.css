@@ -52,9 +52,20 @@
   --handler-bg: #f3f4f6;
   --handler-color: #4b5563;
 
+  /* badge colours - Light mode */
+  --badge-stand-bg: #e0e7ff;
+  --badge-stand-color: #3730a3;
+  --badge-gate-bg: #dcfce7;
+  --badge-gate-color: #166534;
+  --badge-checkin-bg: #fef9c3;
+  --badge-checkin-color: #854d0e;
+  --iata-bg: #f3f4f6;
+  --iata-color: #4b5563;
+  --iata-border: #d1d5db;
 }
 
 /* dark theme overrides for new variables */
+/* dark theme overrides */
 :root.dark {
   --season-summer-bg: #3e2a0d;
   --season-summer-border: #826100;
@@ -66,23 +77,7 @@
   --handler-bg: #2a2a2a;
   --handler-color: #c0c0c0;
 
-  /* badge colours */
-  --badge-stand-bg: #e0e7ff;
-  --badge-stand-color: #3730a3;
-  --badge-gate-bg: #dcfce7;
-  --badge-gate-color: #166534;
-  --badge-checkin-bg: #fef9c3;
-  --badge-checkin-color: #854d0e;
-  --iata-bg: #f3f4f6;
-  /* ensure success/warning/danger light are dark where needed */
-  --warning-light: #5a3e00;
-  --success-light: #264d29;
-  --danger-light: #5e1e1e;
-  --iata-color: #4b5563;
-  --iata-border: #d1d5db;
-}
-
-:root.dark {
+  /* badge colours - Dark mode */
   --badge-stand-bg: #2a2547;
   --badge-stand-color: #c5cae9;
   --badge-gate-bg: #1a372b;
@@ -92,15 +87,6 @@
   --iata-bg: #2a2a2a;
   --iata-color: #c0c0c0;
   --iata-border: #555;
-}
-
-:root.dark {
-  --badge-stand-bg: #2a2547;
-  --badge-stand-color: #c5cae9;
-  --badge-gate-bg: #1a372b;
-  --badge-gate-color: #a5d6a7;
-  --badge-checkin-bg: #4a3a00;
-  --badge-checkin-color: #ffe082;
 }
 
 /* Dark mode table tweaks */
@@ -1494,7 +1480,9 @@ select.form-control {
   gap: 20px;
 }
 
-.counter-group {}
+.counter-group {
+  margin-bottom: 10px;
+}
 
 .counter-group h4 {
   font-size: 0.875rem;

@@ -41,6 +41,8 @@ urlpatterns = [
 
     # Reports
     path('reports/', views.reports_dashboard, name='reports'),
+    path('reports/season-schedule/', views.season_schedule_view, name='season_schedule'),
+    path('reports/season-schedule/export/', views.season_schedule_export_excel, name='season_schedule_excel'),
     path('reports/daily-analysis/', views.daily_analysis, name='daily_analysis'),
     path('reports/export/excel/', views.reports_export_excel, name='reports_export_excel'),
     path('reports/export/pdf/', views.reports_export_pdf, name='reports_export_pdf'),
