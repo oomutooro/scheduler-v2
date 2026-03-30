@@ -4,10 +4,9 @@ Handles stand, gate, and check-in counter assignments for flights.
 """
 
 from datetime import date, time, datetime, timedelta
-from typing import Optional
-from django.db.models import Q
+from typing import Any, Optional, cast
 from core.models import (
-    FlightRequest, ParkingStand, Gate, CheckInCounter,
+    FlightRequest, ParkingStand, Gate,
     StandAllocation, GateAllocation, CheckInAllocation
 )
 
@@ -23,13 +22,17 @@ def time_subtract_minutes(t: time, minutes: int) -> time:
     dt = datetime.combine(date.today(), t) - timedelta(minutes=minutes)
     return dt.time()
 
-def interval_minutes(t: time):
+def interval_minutes(t: time) -> int:
     return t.hour * 60 + t.minute
 
-def times_overlap(start1: time, end1: time, start2: time, end2: time) -> bool:
+def times_overlap(start1: Optional[time], end1: Optional[time], start2: Optional[time], end2: Optional[time]) -> bool:
     """Check if two time intervals overlap. Handles cross-midnight."""
     if any(t is None for t in (start1, end1, start2, end2)):
         return False
+    start1 = cast(time, start1)
+    end1 = cast(time, end1)
+    start2 = cast(time, start2)
+    end2 = cast(time, end2)
     s1 = interval_minutes(start1)
     e1 = interval_minutes(end1)
     if e1 <= s1: e1 += 1440
@@ -41,7 +44,7 @@ def times_overlap(start1: time, end1: time, start2: time, end2: time) -> bool:
     return s1 < e2 and e1 > s2
 
 
-def get_allocated_stands_on_date(date_: date, alloc_cache=None) -> list:
+def get_allocated_stands_on_date(date_: date, alloc_cache: Optional[dict[str, Any]] = None) -> list[tuple[int, time, time]]:
     """Return list of (stand_id, start_time, end_time) already allocated on given date."""
     if alloc_cache is not None:
         key = f"stand_{date_}"
@@ -51,7 +54,7 @@ def get_allocated_stands_on_date(date_: date, alloc_cache=None) -> list:
     return list(StandAllocation.objects.filter(date=date_).values_list('stand_id', 'start_time', 'end_time'))
 
 
-def get_allocated_gates_on_date(date_: date, alloc_cache=None) -> list:
+def get_allocated_gates_on_date(date_: date, alloc_cache: Optional[dict[str, Any]] = None) -> list[tuple[int, time, time]]:
     """Return list of (gate_id, start_time, end_time) already allocated on given date."""
     if alloc_cache is not None:
         key = f"gate_{date_}"
@@ -61,7 +64,7 @@ def get_allocated_gates_on_date(date_: date, alloc_cache=None) -> list:
     return list(GateAllocation.objects.filter(date=date_).values_list('gate_id', 'start_time', 'end_time'))
 
 
-def get_allocated_counters_on_date(date_: date, alloc_cache=None):
+def get_allocated_counters_on_date(date_: date, alloc_cache: Optional[dict[str, Any]] = None) -> list[CheckInAllocation]:
     """Return all CheckInAllocations on a given date as a list."""
     if alloc_cache is not None:
         key = f"checkin_{date_}"
@@ -71,7 +74,10 @@ def get_allocated_counters_on_date(date_: date, alloc_cache=None):
     return list(CheckInAllocation.objects.filter(date=date_).select_related('flight_request'))
 
 
-def find_previous_allocation_for_flight(flight: FlightRequest, date_: date):
+def find_previous_allocation_for_flight(
+    flight: FlightRequest,
+    date_: date,
+) -> tuple[Optional[StandAllocation], Optional[GateAllocation]]:
     """
     Check if this flight already has allocations on other dates.
     If so, return the stand and gate to reuse them.
@@ -88,7 +94,11 @@ def find_previous_allocation_for_flight(flight: FlightRequest, date_: date):
     return prev_stand, prev_gate
 
 
-def get_airline_counter_usage_on_date(airline_id, date_: date, exclude_checkin_id=None):
+def get_airline_counter_usage_on_date(
+    airline_id: int,
+    date_: date,
+    exclude_checkin_id: Optional[int] = None,
+) -> dict[str, list[tuple[time, time, int]]]:
     """
     Get total counters allocated to an airline on a given date.
     Returns dict with {counter_range: [(start, end, flight_id), ...]}
@@ -105,11 +115,11 @@ def get_airline_counter_usage_on_date(airline_id, date_: date, exclude_checkin_i
         key = f"{alloc.counter_from}-{alloc.counter_to}"
         if key not in usage:
             usage[key] = []
-        usage[key].append((alloc.start_time, alloc.end_time, alloc.flight_request_id))
+        usage[key].append((alloc.start_time, alloc.end_time, int(alloc.flight_request.pk)))
     return usage
 
 
-def get_simultaneous_airline_flights(flight: FlightRequest, date_: date):
+def get_simultaneous_airline_flights(flight: FlightRequest, date_: date) -> list[FlightRequest]:
     """
     Find other flights from the same airline that check in at the same time on this date.
     """
@@ -129,7 +139,7 @@ def get_simultaneous_airline_flights(flight: FlightRequest, date_: date):
         season=flight.season,
         year=flight.year,
         operation_type__in=['turnaround', 'departure']
-    ).exclude(id=flight.id)
+    ).exclude(id=int(flight.pk))
     
     overlapping = []
     for other in other_flights:
@@ -150,7 +160,13 @@ def get_simultaneous_airline_flights(flight: FlightRequest, date_: date):
 import random
 
 
-def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False, all_day_flights=None) -> Optional[StandAllocation]:
+def allocate_stand(
+    flight: FlightRequest,
+    date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
+    shuffle: bool = False,
+    all_day_flights: Optional[list[FlightRequest]] = None,
+) -> Optional[StandAllocation]:
     """
     Allocate a suitable stand for the flight on the given date.
 
@@ -211,18 +227,19 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
     else:
         date_spans.append((date_, arrival, departure))
 
-    def _check_conflict(stand_id):
+    def _check_conflict(stand_id: int) -> bool:
         # Find all related stands (parent and children)
         try:
             stand = ParkingStand.objects.get(id=stand_id)
-            related_stand_ids = [stand.id]
-            if stand.parent_stand_id:
-                related_stand_ids.append(stand.parent_stand_id)
+            related_stand_ids = [int(stand.pk)]
+            parent_stand_id = cast(Optional[int], getattr(stand, 'parent_stand_id', None))
+            if parent_stand_id:
+                related_stand_ids.append(parent_stand_id)
             # Add all sub-stands
-            related_stand_ids.extend(ParkingStand.objects.filter(parent_stand_id=stand.id).values_list('id', flat=True))
+            related_stand_ids.extend(list(ParkingStand.objects.filter(parent_stand_id=int(stand.pk)).values_list('id', flat=True)))
             # If the stand has a parent, also add its siblings
-            if stand.parent_stand_id:
-                related_stand_ids.extend(ParkingStand.objects.filter(parent_stand_id=stand.parent_stand_id).exclude(id=stand.id).values_list('id', flat=True))
+            if parent_stand_id:
+                related_stand_ids.extend(list(ParkingStand.objects.filter(parent_stand_id=parent_stand_id).exclude(id=int(stand.pk)).values_list('id', flat=True)))
         except ParkingStand.DoesNotExist:
             related_stand_ids = [stand_id]
 
@@ -236,7 +253,8 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
 
     # Try to reuse the same stand
     if prev_stand_alloc:
-        if not _check_conflict(prev_stand_alloc.stand_id):
+        prev_stand_id = cast(int, getattr(prev_stand_alloc, 'stand_id'))
+        if not _check_conflict(prev_stand_id):
             # Create records for all spans
             for d, s, e in date_spans:
                 StandAllocation.objects.create(
@@ -247,7 +265,7 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
                     end_time=e,
                 )
                 if alloc_cache is not None:
-                    alloc_cache.setdefault(f"stand_{d}", []).append((prev_stand_alloc.stand_id, s, e))
+                        alloc_cache.setdefault(f"stand_{d}", []).append((prev_stand_id, s, e))
             return prev_stand_alloc
 
     # Build preferred stand ordering (cached)
@@ -278,7 +296,7 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
     else:
         all_stands = base_stands
 
-    def stand_priority(stand):
+    def stand_priority(stand: ParkingStand) -> int:
         score = 0
         airline_icao = flight.airline.icao_code
         airline_iata = flight.airline.iata_code
@@ -323,13 +341,14 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
 
     # Future-awareness: if a stand is preferred by a LATER flight that overlaps with us,
     # penalize it for the current flight to "reserve" it.
-    def get_future_penalty(stand):
+    def get_future_penalty(stand: ParkingStand) -> int:
         if not all_day_flights: return 0
         penalty = 0
         current_arrival = flight.arrival_time or flight.departure_time
         
         for future_f in all_day_flights:
-            if future_f.id == flight.id: continue
+            if int(future_f.pk) == int(flight.pk):
+                continue
             
             # Use same logic as allocate_stand to determine future flight's occupancy
             f_arr_orig = future_f.arrival_time
@@ -364,7 +383,8 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
     )
 
     for stand in candidates:
-        if not _check_conflict(stand.id):
+        stand_id = int(stand.pk)
+        if not _check_conflict(stand_id):
             # Create all spans
             first_alloc = None
             for d, s, e in date_spans:
@@ -376,7 +396,7 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
                     end_time=e,
                 )
                 if alloc_cache is not None:
-                    alloc_cache.setdefault(f"stand_{d}", []).append((stand.id, s, e))
+                    alloc_cache.setdefault(f"stand_{d}", []).append((stand_id, s, e))
                 if not first_alloc:
                     first_alloc = alloc
             return first_alloc
@@ -384,7 +404,12 @@ def allocate_stand(flight: FlightRequest, date_: date, alloc_cache=None, shuffle
     return None
 
 
-def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False) -> Optional[GateAllocation]:
+def allocate_gate(
+    flight: FlightRequest,
+    date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
+    shuffle: bool = False,
+) -> Optional[GateAllocation]:
     """
     Allocate a gate for the flight.
     For recurring flights, try to reuse the same gate from a previous allocation.
@@ -402,11 +427,12 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
     # Check if this flight already has an allocation on another date and try to reuse it
     _, prev_gate_alloc = find_previous_allocation_for_flight(flight, date_)
     if prev_gate_alloc:
+        prev_gate_id = cast(int, getattr(prev_gate_alloc, 'gate_id'))
         # Try to reuse the same gate
         existing = get_allocated_gates_on_date(date_, alloc_cache)
         conflict = False
         for (gid, gstart, gend) in existing:
-            if gid == prev_gate_alloc.gate_id and times_overlap(gate_open, gate_close, gstart, gend):
+            if gid == prev_gate_id and times_overlap(gate_open, gate_close, gstart, gend):
                 conflict = True
                 break
         
@@ -420,7 +446,7 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
             )
             alloc.save()
             if alloc_cache is not None:
-                alloc_cache.setdefault(f"gate_{date_}", []).append((prev_gate_alloc.gate_id, gate_open, gate_close))
+                alloc_cache.setdefault(f"gate_{date_}", []).append((prev_gate_id, gate_open, gate_close))
             return alloc
 
     existing = get_allocated_gates_on_date(date_, alloc_cache)
@@ -432,7 +458,7 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
     if shuffle and alloc_cache is not None and "all_gates" in alloc_cache:
         random.shuffle(alloc_cache["all_gates"])
 
-    def gate_priority(gate):
+    def gate_priority(gate: Gate) -> int:
         score = 0
         
         # Preferred gates (source of truth: USER instructions)
@@ -459,9 +485,8 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
     # determine existing stand allocation for this flight/date (if any)
     stand_alloc = StandAllocation.objects.filter(flight_request=flight, date=date_).first()
     stand_has_bridge = bool(stand_alloc and stand_alloc.stand.has_boarding_bridge)
-    stand_num = stand_alloc.stand.stand_number if stand_alloc else None
-
     for gate in candidates:
+        gate_id = int(gate.pk)
         # enforce bridge rules: a gate with a boarding bridge may only be used
         # if the assigned stand also has a bridge and the two are connected.
         if gate.has_boarding_bridge:
@@ -480,7 +505,7 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
 
         conflict = False
         for (gid, gstart, gend) in existing:
-            if gid == gate.id and times_overlap(gate_open, gate_close, gstart, gend):
+            if gid == gate_id and times_overlap(gate_open, gate_close, gstart, gend):
                 conflict = True
                 break
         if not conflict:
@@ -493,13 +518,13 @@ def allocate_gate(flight: FlightRequest, date_: date, alloc_cache=None, shuffle:
             )
             alloc.save()
             if alloc_cache is not None:
-                alloc_cache.setdefault(f"gate_{date_}", []).append((gate.id, gate_open, gate_close))
+                alloc_cache.setdefault(f"gate_{date_}", []).append((gate_id, gate_open, gate_close))
             return alloc
 
     return None
 
 
-def get_ground_handlers_map():
+def get_ground_handlers_map() -> dict[int, Any]:
     """Build a mapping of Airline ID -> GroundHandler object."""
     from core.models import GroundHandler
     handlers = GroundHandler.objects.prefetch_related('airlines').all()
@@ -510,7 +535,13 @@ def get_ground_handlers_map():
     return h_map
 
 
-def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuffle: bool = False, all_day_flights=None) -> Optional[CheckInAllocation]:
+def allocate_checkin(
+    flight: FlightRequest,
+    date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
+    shuffle: bool = False,
+    all_day_flights: Optional[list[FlightRequest]] = None,
+) -> Optional[CheckInAllocation]:
     """
     Allocate check-in counters with handler-aware look-ahead.
     
@@ -577,12 +608,10 @@ def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuff
     if shuffle and alloc_cache is not None and "all_counters" in alloc_cache:
         random.shuffle(alloc_cache["all_counters"])
     # Get airline's current counter usage
-    airline_usage = get_airline_counter_usage_on_date(flight.airline_id, date_)
-    
     # Calculate how many counters this airline is already using
     airline_counters_in_use = set()
     for alloc in existing_allocs:
-        if alloc.flight_request.airline_id == flight.airline_id:
+        if int(alloc.flight_request.airline.pk) == int(flight.airline.pk):
             airline_counters_in_use.update(range(alloc.counter_from, alloc.counter_to + 1))
     
     # Determine total counters available for this airline
@@ -609,16 +638,16 @@ def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuff
         preferred_starts = list(range(5, 23)) + list(range(1, 5))
 
     # Find contiguous block of free counters
-    def is_counter_free(counter_num, start, end):
-        h_map = alloc_cache.get('handlers_map') if alloc_cache else get_ground_handlers_map()
-        my_handler = h_map.get(flight.airline_id)
+    def is_counter_free(counter_num: int, start: time, end: time) -> bool:
+        h_map = cast(dict[int, Any], alloc_cache.get('handlers_map')) if alloc_cache and alloc_cache.get('handlers_map') else get_ground_handlers_map()
+        my_handler = h_map.get(int(flight.airline.pk))
         
         for alloc in existing_allocs:
             if alloc.counter_from <= counter_num <= alloc.counter_to:
                 # Check for overlap
                 if times_overlap(start, end, alloc.start_time, alloc.end_time):
                     # Exception: If same handler, allow a 45-min "soft" overlap
-                    other_handler = h_map.get(alloc.flight_request.airline_id)
+                    other_handler = h_map.get(int(alloc.flight_request.airline.pk))
                     if my_handler and other_handler and my_handler.id == other_handler.id:
                         # Calculate overlap duration
                         s_max = max(interval_minutes(start), interval_minutes(alloc.start_time))
@@ -630,11 +659,11 @@ def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuff
         return True
 
     # Future-awareness for counters
-    def get_future_counter_penalty(start_c, end_c):
+    def get_future_counter_penalty(_start_c: int, _end_c: int) -> int:
         if not all_day_flights: return 0
         penalty = 0
         for future_f in all_day_flights:
-            if future_f.id == flight.id or future_f.operation_type == 'arrival':
+            if int(future_f.pk) == int(flight.pk) or future_f.operation_type == 'arrival':
                 continue
             
             f_dep = future_f.departure_time
@@ -688,12 +717,15 @@ def allocate_checkin(flight: FlightRequest, date_: date, alloc_cache=None, shuff
     return None  # No counters available
 
 
-def allocate_resources_for_date(date_: date, alloc_cache=None) -> dict:
+def allocate_resources_for_date(
+    date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
+) -> dict[str, int]:
     """
     Auto-allocate stands, gates, and check-in counters for all flights on a date.
     Returns a summary dict with counts of successful allocations and conflicts.
     """
-    from core.services.season import get_season_for_date, get_season_dates, is_date_in_season
+    from core.services.season import get_season_for_date
 
     season, year = get_season_for_date(date_)
     flights = FlightRequest.objects.filter(
@@ -703,7 +735,7 @@ def allocate_resources_for_date(date_: date, alloc_cache=None) -> dict:
     # Sort flights by "Preference Priority" then by Time.
     # This ensures high-preference flights (EK, QR, etc.) get first pick of their stands,
     # effectively "reserving" them even if they arrive later in the day.
-    def flight_priority_key(f):
+    def flight_priority_key(f: FlightRequest) -> tuple[int, time]:
         p_val = 0
         if f.airline.icao_code in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE'):
             p_val = 2
@@ -775,12 +807,15 @@ def allocate_resources_for_date(date_: date, alloc_cache=None) -> dict:
     return results
 
 
-def get_conflicts_for_date(date_: date) -> list:
+def get_conflicts_for_date(date_: date) -> list[FlightRequest]:
     """Return list of flights with conflicts on a given date."""
     return list(FlightRequest.objects.filter(status='conflict'))
 
 
-def allocate_resources_for_flight(flight: FlightRequest, alloc_cache=None) -> dict:
+def allocate_resources_for_flight(
+    flight: FlightRequest,
+    alloc_cache: Optional[dict[str, Any]] = None,
+) -> dict[str, int]:
     """
     Auto-allocate stands, gates, and check-in counters for all operating
     dates of a single flight within its season (or valid_from/valid_to range).

@@ -1,8 +1,9 @@
-from django.db.models import Count, Q, Sum
+from django.db.models import Count
 from collections import defaultdict
-from core.models import FlightRequest, Airline, CheckInAllocation, GateAllocation, StandAllocation
+from typing import Any
+from core.models import FlightRequest
 
-def generate_report_data(season: str, year: int) -> dict:
+def generate_report_data(season: str, year: int) -> dict[str, Any]:
     """Generate all analytical data required for the reports dashboard."""
     flights = FlightRequest.objects.filter(season=season, year=year)
     total_flights = flights.count()
@@ -106,7 +107,7 @@ def generate_report_data(season: str, year: int) -> dict:
     avg_daily_vehicles = avg_daily_pax * 0.3
     
     # Hourly load curves (Pax and vehicles)
-    hourly_pax = [0] * 24
+    hourly_pax = [0.0] * 24
     for f in flights:
         freq = sum(1 for _, pos in day_masks if f.days_of_operation & pos)
         daily_freq = freq / 7.0
@@ -158,13 +159,12 @@ def generate_report_data(season: str, year: int) -> dict:
     }
 
 
-def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
+def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict[str, Any]:
     """Compute metrics to support the daily resource utilisation dashboard.
 
     * `day_of_week` should be one of 'sunday'..'saturday' (lowercase).
     * Returns a dictionary suitable for passing straight to the template.
     """
-    from datetime import timedelta
     from core.models import (
         StandAllocation, GateAllocation, CheckInAllocation,
         ParkingStand, Gate, CheckInCounter
@@ -185,7 +185,7 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
     total_flights = len(day_flights)
 
     # gather allocations for those flights, then filter by weekday of allocation date
-    flight_ids = [f.id for f in day_flights]
+    flight_ids = [int(f.pk) for f in day_flights]
     stand_allocs = StandAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request', 'stand')
     gate_allocs = GateAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request', 'gate')
     checkin_allocs = CheckInAllocation.objects.filter(flight_request_id__in=flight_ids).select_related('flight_request')
@@ -202,7 +202,7 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
     gantt_data = []
     for flight in day_flights:
         flight_data = {
-            'id': flight.id,
+            'id': int(flight.pk),
             'name': f"{flight.airline.iata_code} {flight.display_flight_numbers}",
             'arrival_time': flight.arrival_time,
             'departure_time': flight.departure_time,
@@ -221,9 +221,9 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
                 end_minutes = alloc.end_time.hour * 60 + alloc.end_time.minute
                 if end_minutes < start_minutes:
                     end_minutes += 24 * 60
-                duration_hours = (end_minutes - start_minutes) / 60
+                duration_hrs = (end_minutes - start_minutes) / 60
                 left_percent = (start_minutes / (24 * 60)) * 100
-                width_percent = (duration_hours / 24) * 100
+                width_percent = (duration_hrs / 24) * 100
 
                 resource_name = ''
                 if rtype == 'stand':
@@ -251,14 +251,14 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
     hourly_gate = [0] * 24
     hourly_checkin = [0] * 24
 
-    def mark_hours(alloc, hour_list, flight_set):
+    def mark_hours(alloc: Any, hour_list: list[int], flight_set: dict[int, set[int]]) -> None:
         start = alloc.start_time.hour + alloc.start_time.minute / 60
         end = alloc.end_time.hour + alloc.end_time.minute / 60
         if end < start:
             end += 24
         for h in range(int(math.floor(start)), int(math.ceil(end))):
             hour_list[h % 24] += 1
-            flight_set[h % 24].add(alloc.flight_request_id)
+            flight_set[h % 24].add(int(alloc.flight_request.pk))
 
     for a in day_allocs_stand:
         mark_hours(a, hourly_stand, hourly_flight_set)
@@ -270,7 +270,7 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
     hourly_counts = [len(hourly_flight_set[h]) for h in range(24)]
 
     # total resource hours
-    def duration_hours(a):
+    def duration_hours(a: Any) -> float:
         s = a.start_time.hour * 60 + a.start_time.minute
         e = a.end_time.hour * 60 + a.end_time.minute
         if e < s:
@@ -288,7 +288,7 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
     # number of distinct flights with at least one resource allocated on the selected day
     allocated_ids = set()
     for a in day_allocs_stand + day_allocs_gate + day_allocs_checkin:
-        allocated_ids.add(a.flight_request_id)
+        allocated_ids.add(int(a.flight_request.pk))
     allocated_flights = len(allocated_ids)
     allocation_percentage = (allocated_flights / total_flights * 100) if total_flights > 0 else 0
 
@@ -309,19 +309,13 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
     least_busy_day = min(day_counts_all.items(), key=lambda x: x[1])[0] if day_counts_all else None
 
     # choose busiest hour of non-home-airline flights for suggestion baseline
-    nonhome_ids = [f.id for f in day_flights if not f.airline.is_home_airline]
+    nonhome_ids = [int(f.pk) for f in day_flights if not f.airline.is_home_airline]
     hourly_nonhome = [0] * 24
     for h in range(24):
         hourly_nonhome[h] = len([fid for fid in hourly_flight_set[h] if fid in nonhome_ids])
     nonhome_busiest = None
     if any(hourly_nonhome):
         nonhome_busiest = hourly_nonhome.index(max(hourly_nonhome))
-
-    # pick an alternate hour based on non-home counts
-    alt_hour = None
-    if nonhome_busiest is not None:
-        alt_hour = min((h for h in range(24) if h != nonhome_busiest),
-                       key=lambda h: hourly_nonhome[h])
 
     suggestions = []
     home_present = any(f.airline.is_home_airline for f in day_flights)
@@ -333,7 +327,7 @@ def generate_daily_analysis(season: str, year: int, day_of_week: str) -> dict:
         hour_iter = iter(hour_order)
 
         for fid in hourly_flight_set[nonhome_busiest]:
-            flight = next((f for f in day_flights if f.id == fid), None)
+            flight = next((f for f in day_flights if int(f.pk) == fid), None)
             if flight and not flight.airline.is_home_airline:
                 try:
                     rec_hr = next(hour_iter)

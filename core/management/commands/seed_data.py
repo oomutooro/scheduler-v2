@@ -4,6 +4,7 @@ Run with: python manage.py seed_data
 """
 
 from django.core.management.base import BaseCommand
+from typing import Any
 from core.models import Airline, Airport, AircraftType, ParkingStand, Gate, CheckInCounter
 
 
@@ -128,7 +129,7 @@ GATES = [
 class Command(BaseCommand):
     help = 'Seed initial reference data (airlines, airports, aircraft types, stands, gates, counters)'
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         self.stdout.write('Seeding airlines...')
         for data in AIRLINES:
             Airline.objects.get_or_create(iata_code=data['iata_code'], defaults=data)

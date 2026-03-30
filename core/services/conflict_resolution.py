@@ -1,10 +1,15 @@
 from datetime import datetime, date, time, timedelta
-from typing import List, Dict, Tuple
+from typing import Any
 from core.models import FlightRequest
 from core.services.allocation import time_add_minutes, allocate_stand, allocate_gate, allocate_checkin
 from core.services.season import get_season_dates
 
-def _try_allocate_times(flight: FlightRequest, arrival: time, departure: time, test_dates: List[date]) -> bool:
+def _try_allocate_times(
+    flight: FlightRequest,
+    arrival: time | None,
+    departure: time | None,
+    test_dates: list[date],
+) -> bool:
     """
     Simulate allocating resources for the flight at the given test times, across all test dates.
     We temporarily modify the flight's times, run the allocation logic, and roll back.
@@ -55,7 +60,11 @@ def _try_allocate_times(flight: FlightRequest, arrival: time, departure: time, t
     
     return success
 
-def find_alternative_slots(flight: FlightRequest, max_hours_search: int = 4, interval_mins: int = 15) -> List[Dict]:
+def find_alternative_slots(
+    flight: FlightRequest,
+    max_hours_search: int = 4,
+    interval_mins: int = 15,
+) -> list[dict[str, Any]]:
     """
     Finds alternative arrival/departure times for a flight that resolve its conflicts.
     Searches forward and backward by max_hours_search, in steps of interval_mins.
@@ -87,6 +96,7 @@ def find_alternative_slots(flight: FlightRequest, max_hours_search: int = 4, int
     orig_arrival = flight.arrival_time
     orig_departure = flight.departure_time
     anchor_time = orig_arrival or orig_departure
+    assert anchor_time is not None
     
     # Calculate difference between arrival and departure if both exist
     duration_mins = 0

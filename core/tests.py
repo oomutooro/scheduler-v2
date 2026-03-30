@@ -157,8 +157,9 @@ class DailyAnalysisTest(TestCase):
         )
         response = self.client.get('/reports/daily-analysis/?season=summer&year=2026&day=monday')
         ctx = response.context
-        if len(ctx.get('suggestions', [])) > 1:
-            hours = [s['recommend_hour'] for s in ctx['suggestions']]
+        suggestions = ctx.get('suggestions') or []
+        if len(suggestions) > 1:
+            hours = [s['recommend_hour'] for s in suggestions]
             # expect at least two different recommendation hours
             self.assertNotEqual(hours[0], hours[1])
 
@@ -236,7 +237,8 @@ class AllocationAutoTest(TestCase):
         # create an existing allocation manually
         old_alloc = allocate_stand(self.flight, alloc_date, {})
         self.assertIsNotNone(old_alloc)
-        old_id = old_alloc.id
+        assert old_alloc is not None
+        old_id = old_alloc.pk
 
         # run auto-allocate; selecting the same flight
         response = self.client.post(
@@ -253,7 +255,7 @@ class AllocationAutoTest(TestCase):
         self.assertTrue(new_allocs.exists())
 
         # now remove all resources so allocation truly cannot succeed
-        from core.models import ParkingStand, Gate, CheckInCounter
+        from core.models import ParkingStand, Gate
         ParkingStand.objects.all().delete()
         Gate.objects.all().delete()
         # allocate_checkin uses a @property; temporarily override it on the class
@@ -319,7 +321,7 @@ class AllocationAutoTest(TestCase):
         )
 
         # force failure by removing all resources
-        from core.models import ParkingStand, Gate, CheckInCounter
+        from core.models import ParkingStand, Gate
         ParkingStand.objects.all().delete()
         Gate.objects.all().delete()
         # arbitrarily high counter requirement
@@ -354,8 +356,7 @@ class AllocationRulesTest(TestCase):
     """Ensure gate assignments respect stand/bridge compatibility rules."""
 
     def setUp(self):
-        from datetime import time
-        from core.models import Airline, AircraftType, FlightRequest
+        from core.models import Airline, AircraftType
         # non-home airline
         self.airline = Airline.objects.create(iata_code='XX', icao_code='XXX', name='Test', is_home_airline=False)
         self.aircraft = AircraftType.objects.create(
@@ -363,7 +364,6 @@ class AllocationRulesTest(TestCase):
             category='narrow_body', size_code='C', is_wide_body=False, pax_capacity=100
         )
         # create standard gate objects if not present; will be seeded in migrations but safe to ensure
-        from core.management.commands import seed_data
         # seed_data handle already created gates/stands; rely on existing data
 
     def test_bridge_gate_skipped_without_bridge_stand(self):
@@ -428,6 +428,7 @@ class AllocationRulesTest(TestCase):
                                        date=alloc_date, start_time=time(8,0), end_time=time(10,0))
         result = allocate_gate(flight, alloc_date, alloc_cache={})
         self.assertIsNotNone(result)
+        assert result is not None
         self.assertEqual(result.gate.gate_number, '2B')
 
     def test_no_bridge_gate_for_mismatched_bridge_stand(self):

@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from datetime import date
 
 
 # ─── Reference Data ───────────────────────────────────────────────────────────
@@ -190,9 +191,8 @@ class FlightRequest(models.Model):
                 days.append(day.capitalize())
         return days
 
-    def operates_on_date(self, date):
+    def operates_on_date(self, date: date) -> bool:
         """Return True if this flight request operates on the given date."""
-        import datetime
         # Check date range
         if self.valid_from and date < self.valid_from:
             return False
@@ -285,7 +285,7 @@ class ParkingStand(models.Model):
         bridge = f" (Bridge {self.boarding_bridge_number})" if self.has_boarding_bridge else ""
         return f"Stand {self.stand_number} — Code {self.size_code}{bridge}"
 
-    def can_accommodate(self, aircraft_type):
+    def can_accommodate(self, aircraft_type: 'AircraftType') -> bool:
         """Check if this stand can accommodate the given aircraft type based on size code."""
         size_order = ['A', 'B', 'C', 'D', 'E', 'F']
         stand_idx = size_order.index(self.size_code)
