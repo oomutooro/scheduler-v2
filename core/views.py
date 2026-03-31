@@ -8,6 +8,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
+from django.db import transaction
 from django.db.models import Q, Count
 from urllib.parse import urlencode
 
@@ -450,6 +451,19 @@ def flight_reject(request: HttpRequest, pk: int):
 
 # ─── Daily Schedule ───────────────────────────────────────────────────────────
 
+DAY_START_TIME = datetime.strptime('08:30', '%H:%M').time()
+DAY_END_TIME = datetime.strptime('18:00', '%H:%M').time()
+
+
+def _time_band_for_flight(flight: FlightRequest) -> str:
+    """Classify a flight into day/night using local operational windows."""
+    ref_time = flight.arrival_time or flight.departure_time
+    if ref_time is None:
+        return 'unknown'
+    if DAY_START_TIME <= ref_time < DAY_END_TIME:
+        return 'day'
+    return 'night'
+
 def schedule_view(request: HttpRequest):
     date_str = request.GET.get('date', date.today().strftime('%Y-%m-%d'))
     try:
@@ -555,6 +569,193 @@ def schedule_view(request: HttpRequest):
         'active_page': 'schedule',
     }
     return render(request, 'schedule.html', context)
+
+
+def expected_today_allocations(request: HttpRequest):
+    """
+    Let user select expected flights for the current day and simulate allocations.
+    This is non-destructive: all simulation records are rolled back.
+    """
+    from core.services.season import get_season_for_date
+    from core.services.allocation import allocate_stand, allocate_gate, allocate_checkin
+
+    today = date.today()
+    season, year = get_season_for_date(today)
+
+    all_requests = FlightRequest.objects.filter(
+        season=season,
+        year=year,
+    ).exclude(status='cancelled').select_related('airline', 'aircraft_type', 'origin', 'destination')
+
+    candidate_flights = sorted(
+        [f for f in all_requests if f.operates_on_date(today)],
+        key=lambda x: x.arrival_time or x.departure_time or datetime.min.time(),
+    )
+
+    selected_ids: set[int] = set()
+    action = ''
+    if request.method == 'POST':
+        action = request.POST.get('action', 'generate')
+        selected_ids = {
+            int(fid)
+            for fid in request.POST.getlist('expected_flights')
+            if fid.isdigit()
+        }
+
+    selected_flights = [f for f in candidate_flights if int(f.pk) in selected_ids]
+
+    suggestions = []
+    suggested_count = 0
+    conflict_count = 0
+
+    if request.method == 'POST':
+        if not selected_flights:
+            messages.warning(request, 'Select at least one expected flight for today.')
+        else:
+            # Keep priority ordering consistent with the daily allocator.
+            def flight_priority_key(f: FlightRequest):
+                p_val = 0
+                if f.airline.icao_code in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE'):
+                    p_val = 2
+                elif f.airline.is_home_airline:
+                    p_val = 1
+                return (-p_val, f.arrival_time or datetime.min.time())
+
+            prioritized_flights = sorted(selected_flights, key=flight_priority_key)
+
+            if action == 'apply':
+                # Persist allocations for the selected expected flights.
+                with transaction.atomic():
+                    StandAllocation.objects.filter(date=today).delete()
+                    GateAllocation.objects.filter(date=today).delete()
+                    CheckInAllocation.objects.filter(date=today).delete()
+
+                    alloc_cache: dict[str, Any] = {}
+                    for flight in prioritized_flights:
+                        stand = allocate_stand(
+                            flight,
+                            today,
+                            alloc_cache=alloc_cache,
+                            all_day_flights=prioritized_flights,
+                        )
+                        departure_alloc_date = today + flight.departure_date_offset
+                        gate = allocate_gate(
+                            flight,
+                            departure_alloc_date,
+                            alloc_cache=alloc_cache,
+                        )
+                        checkin = allocate_checkin(
+                            flight,
+                            departure_alloc_date,
+                            alloc_cache=alloc_cache,
+                            all_day_flights=prioritized_flights,
+                        )
+
+                        is_suggested = bool(stand or gate or checkin)
+                        if is_suggested:
+                            suggested_count += 1
+                            flight.status = 'allocated'
+                        else:
+                            conflict_count += 1
+                            flight.status = 'conflict'
+                        flight.save(update_fields=['status', 'updated_at'])
+
+                        suggestions.append({
+                            'flight': flight,
+                            'time_band': _time_band_for_flight(flight),
+                            'stand': stand,
+                            'gate': gate,
+                            'checkin': checkin,
+                            'departure_alloc_date': departure_alloc_date,
+                            'is_suggested': is_suggested,
+                        })
+
+                messages.success(
+                    request,
+                    f'Applied today allocations: {suggested_count} allocated, {conflict_count} conflict(s).'
+                )
+            else:
+                # Non-destructive simulation mode.
+                with transaction.atomic():
+                    simulation_sp = transaction.savepoint()
+
+                    # Remove same-day allocations inside the simulation so suggestions
+                    # reflect the selected scenario only.
+                    StandAllocation.objects.filter(date=today).delete()
+                    GateAllocation.objects.filter(date=today).delete()
+                    CheckInAllocation.objects.filter(date=today).delete()
+
+                    alloc_cache: dict[str, Any] = {}
+                    for flight in prioritized_flights:
+                        stand = allocate_stand(
+                            flight,
+                            today,
+                            alloc_cache=alloc_cache,
+                            all_day_flights=prioritized_flights,
+                        )
+                        departure_alloc_date = today + flight.departure_date_offset
+                        gate = allocate_gate(
+                            flight,
+                            departure_alloc_date,
+                            alloc_cache=alloc_cache,
+                        )
+                        checkin = allocate_checkin(
+                            flight,
+                            departure_alloc_date,
+                            alloc_cache=alloc_cache,
+                            all_day_flights=prioritized_flights,
+                        )
+
+                        is_suggested = bool(stand or gate or checkin)
+                        if is_suggested:
+                            suggested_count += 1
+                        else:
+                            conflict_count += 1
+
+                        suggestions.append({
+                            'flight': flight,
+                            'time_band': _time_band_for_flight(flight),
+                            'stand': stand,
+                            'gate': gate,
+                            'checkin': checkin,
+                            'departure_alloc_date': departure_alloc_date,
+                            'is_suggested': is_suggested,
+                        })
+
+                    transaction.savepoint_rollback(simulation_sp)
+
+                if suggested_count:
+                    messages.success(
+                        request,
+                        f'Suggestions generated: {suggested_count} flight(s) with allocations, {conflict_count} conflict(s).'
+                    )
+                else:
+                    messages.warning(
+                        request,
+                        'No complete allocation suggestions were found for the selected flights.'
+                    )
+
+    candidate_rows = [
+        {
+            'flight': flight,
+            'time_band': _time_band_for_flight(flight),
+            'selected': int(flight.pk) in selected_ids,
+        }
+        for flight in candidate_flights
+    ]
+
+    context = {
+        'today': today,
+        'candidate_rows': candidate_rows,
+        'selected_count': len(selected_flights),
+        'day_count': sum(1 for row in candidate_rows if row['time_band'] == 'day'),
+        'night_count': sum(1 for row in candidate_rows if row['time_band'] == 'night'),
+        'suggestions': suggestions,
+        'suggested_count': suggested_count,
+        'conflict_count': conflict_count,
+        'active_page': 'schedule_expected',
+    }
+    return render(request, 'expected_today_allocations.html', context)
 
 
 @require_POST

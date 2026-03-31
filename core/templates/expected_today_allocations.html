@@ -1,0 +1,204 @@
+{% extends 'base.html' %}
+{% block title %}Expected Flights Today — Entebbe Airport Slotting System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Expected Flights (Today)</h1>
+    <p class="page-subtitle">Select expected flights for {{ today|date:"F d, Y" }} and generate allocation suggestions.</p>
+</div>
+
+<div class="schedule-header-card">
+    <div class="schedule-stats-row">
+        <div class="sched-stat sched-stat-blue">
+            <div class="sched-stat-label">Candidate Flights</div>
+            <div class="sched-stat-value">{{ candidate_rows|length }}</div>
+            <span class="sched-stat-icon">✈</span>
+        </div>
+        <div class="sched-stat sched-stat-green">
+            <div class="sched-stat-label">Day Flights (08:30–18:00)</div>
+            <div class="sched-stat-value">{{ day_count }}</div>
+            <span class="sched-stat-icon">☀</span>
+        </div>
+        <div class="sched-stat sched-stat-red">
+            <div class="sched-stat-label">Night Flights (18:00–08:30)</div>
+            <div class="sched-stat-value">{{ night_count }}</div>
+            <span class="sched-stat-icon">🌙</span>
+        </div>
+    </div>
+
+    <div class="empty-notice" style="margin-top: 1rem;">
+        <span class="info-icon">i</span>
+        <div>
+            <strong>Rules used for suggestions</strong><br>
+            <small>All current Uganda Airlines rules, gate/stand preferences, and ground-handler logic are applied exactly as in auto-allocation.</small>
+        </div>
+    </div>
+</div>
+
+<form method="post" class="table-card" style="margin-top: 1rem;">
+    {% csrf_token %}
+    <input type="hidden" name="action" id="allocation-action" value="generate">
+    <div class="section-title" style="margin-bottom: 1rem;">1) Select Expected Flights For Today</div>
+
+    {% if candidate_rows %}
+    <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAll(true)">Select All</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAll(false)">Clear All</button>
+        <button type="submit" class="btn btn-primary" onclick="setAction('generate')">Generate Suggestions</button>
+        <button type="submit" class="btn btn-secondary" onclick="setAction('apply'); return confirm('Apply these allocations for today? This will replace existing allocations for today.');">Apply Suggested Allocations</button>
+    </div>
+
+    <table class="data-table schedule-table">
+        <thead>
+            <tr>
+                <th>Select</th>
+                <th>Airline</th>
+                <th>Flight No.</th>
+                <th>Aircraft</th>
+                <th>Route</th>
+                <th>Operation</th>
+                <th>Arrival</th>
+                <th>Departure</th>
+                <th>Time Band</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in candidate_rows %}
+            <tr>
+                <td>
+                    <input type="checkbox" name="expected_flights" value="{{ row.flight.pk }}" class="expected-flight-checkbox"
+                        {% if row.selected %}checked{% endif %}>
+                </td>
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    <br><small>{{ row.flight.airline.name }}</small>
+                </td>
+                <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
+                <td>{{ row.flight.origin.iata_code|default:"-" }} → {{ row.flight.destination.iata_code|default:"-" }}</td>
+                <td>
+                    <span class="op-badge op-{{ row.flight.operation_type }}">
+                        {% if row.flight.operation_type == 'turnaround' %}Turnaround
+                        {% elif row.flight.operation_type == 'arrival' %}Arrival
+                        {% else %}Departure{% endif %}
+                    </span>
+                </td>
+                <td>{{ row.flight.arrival_time|time:"H:i"|default:"-" }}</td>
+                <td>{{ row.flight.departure_time|time:"H:i"|default:"-" }}</td>
+                <td>
+                    {% if row.time_band == 'day' %}
+                    <span class="status-badge status-allocated">Day</span>
+                    {% elif row.time_band == 'night' %}
+                    <span class="status-badge status-conflict">Night</span>
+                    {% else %}
+                    <span class="status-badge">Unknown</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state-icon">📅</div>
+        <h3>No operational flights for today</h3>
+        <p>No flights from the current season operate on {{ today|date:"F d, Y" }}.</p>
+    </div>
+    {% endif %}
+</form>
+
+{% if suggestions %}
+<div class="table-card" style="margin-top: 1rem;">
+    <div class="section-title" style="margin-bottom: 1rem;">
+        2) Suggested Allocation Results ({{ suggested_count }} suggested, {{ conflict_count }} conflicts)
+    </div>
+
+    <table class="data-table schedule-table">
+        <thead>
+            <tr>
+                <th>Airline</th>
+                <th>Flight No.</th>
+                <th>Time Band</th>
+                <th>Suggested Stand</th>
+                <th>Suggested Gate</th>
+                <th>Suggested Check-in</th>
+                <th>Result</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in suggestions %}
+            <tr class="{% if not row.is_suggested %}row-conflict{% else %}row-allocated{% endif %}">
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    <br><small>{{ row.flight.airline.name }}</small>
+                </td>
+                <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td>
+                    {% if row.time_band == 'day' %}
+                    <span class="status-badge status-allocated">Day</span>
+                    {% elif row.time_band == 'night' %}
+                    <span class="status-badge status-conflict">Night</span>
+                    {% else %}
+                    <span class="status-badge">Unknown</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.stand %}
+                    <span class="resource-badge resource-stand">Stand {{ row.stand.stand.stand_number }}</span>
+                    <br><small>{{ row.stand.start_time|time:"H:i" }} – {{ row.stand.end_time|time:"H:i" }}</small>
+                    {% else %}
+                    <span class="unallocated">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.gate %}
+                    <span class="resource-badge resource-gate">Gate {{ row.gate.gate.gate_number }}</span>
+                    {% if row.departure_alloc_date != today %}
+                    <br><small>on {{ row.departure_alloc_date|date:"d M" }}</small>
+                    {% endif %}
+                    {% else %}
+                    <span class="unallocated">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.checkin %}
+                    <span class="resource-badge resource-checkin">C {{ row.checkin.counter_from }}–{{ row.checkin.counter_to }}</span>
+                    {% if row.departure_alloc_date != today %}
+                    <br><small>on {{ row.departure_alloc_date|date:"d M" }}</small>
+                    {% endif %}
+                    {% else %}
+                    {% if row.flight.operation_type == 'arrival' %}
+                    <span class="na-badge">N/A</span>
+                    {% else %}
+                    <span class="unallocated">-</span>
+                    {% endif %}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.is_suggested %}
+                    <span class="status-badge status-allocated">Suggested</span>
+                    {% else %}
+                    <span class="status-badge status-conflict">Conflict</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function setAction(action) {
+    document.getElementById('allocation-action').value = action;
+}
+
+function toggleAll(checked) {
+    document.querySelectorAll('.expected-flight-checkbox').forEach(function (box) {
+        box.checked = checked;
+    });
+}
+</script>
+{% endblock %}

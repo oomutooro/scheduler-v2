@@ -36,6 +36,7 @@
 
     <!-- Action buttons -->
     <div class="schedule-actions">
+        <a href="{% url 'expected_today_allocations' %}" class="btn btn-secondary">Expected Flights Today</a>
         <form method="post" action="{% url 'schedule_allocate' %}">
             {% csrf_token %}
             <input type="hidden" name="date" value="{{ date_str }}">
