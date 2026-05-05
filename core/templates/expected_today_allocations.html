@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Expected Flights (Today)</h1>
-    <p class="page-subtitle">Select expected flights for {{ today|date:"F d, Y" }} and generate allocation suggestions.</p>
+    <p class="page-subtitle">Separate day and night shift flights, then generate or apply allocation suggestions.</p>
 </div>
 
 <div class="schedule-header-card">
@@ -30,7 +30,7 @@
         <span class="info-icon">i</span>
         <div>
             <strong>Rules used for suggestions</strong><br>
-            <small>All current Uganda Airlines rules, gate/stand preferences, and ground-handler logic are applied exactly as in auto-allocation.</small>
+            <small>Night shift includes {{ today|date:"d M" }} evening flights and {{ tomorrow|date:"d M" }} early-morning flights (before 08:30).</small>
         </div>
     </div>
 </div>
@@ -38,7 +38,37 @@
 <form method="post" class="table-card" style="margin-top: 1rem;">
     {% csrf_token %}
     <input type="hidden" name="action" id="allocation-action" value="generate">
-    <div class="section-title" style="margin-bottom: 1rem;">1) Select Expected Flights For Today</div>
+    <input type="hidden" name="override_flight_id" id="override-flight-id" value="">
+    <input type="hidden" name="override_operation_date" id="override-operation-date" value="">
+    <div class="section-title" style="margin-bottom: 1rem;">1) Select Expected Flights By Shift</div>
+
+    <div class="empty-notice" style="margin-bottom: 1rem;">
+        <span class="info-icon">i</span>
+        <div>
+            <strong>Override tools</strong><br>
+            <small>Add a non-operating flight into this day/shift, or remove an operating flight to free resources.</small>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 2fr 1fr auto; gap: 0.5rem; align-items: end; margin-bottom: 1rem;">
+        <div>
+            <label class="label-text" for="include-flight-select">Add Flight To Expected List</label>
+            <select id="include-flight-select" class="date-input" style="width: 100%;">
+                <option value="">Select flight...</option>
+                {% for f in override_flight_options %}
+                <option value="{{ f.pk }}">{{ f.airline.iata_code }} — {{ f.display_flight_numbers }} ({{ f.arrival_time|time:"H:i"|default:"-" }} / {{ f.departure_time|time:"H:i"|default:"-" }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="label-text" for="include-date-select">Operation Date</label>
+            <select id="include-date-select" class="date-input" style="width: 100%;">
+                <option value="{{ today|date:'Y-m-d' }}">{{ today|date:"d M Y" }}</option>
+                <option value="{{ tomorrow|date:'Y-m-d' }}">{{ tomorrow|date:"d M Y" }}</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-secondary" onclick="return submitIncludeOverride();">Add Flight</button>
+    </div>
 
     {% if candidate_rows %}
     <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem;">
@@ -48,25 +78,28 @@
         <button type="submit" class="btn btn-secondary" onclick="setAction('apply'); return confirm('Apply these allocations for today? This will replace existing allocations for today.');">Apply Suggested Allocations</button>
     </div>
 
+    <h3 class="section-title" style="margin-top: 0.5rem; margin-bottom: 0.5rem;">Day Shift Flights ({{ today|date:"d M Y" }})</h3>
     <table class="data-table schedule-table">
         <thead>
             <tr>
                 <th>Select</th>
                 <th>Airline</th>
                 <th>Flight No.</th>
+                <th>Operating Date</th>
                 <th>Aircraft</th>
                 <th>Route</th>
                 <th>Operation</th>
                 <th>Arrival</th>
                 <th>Departure</th>
-                <th>Time Band</th>
+                <th>Shift</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
-            {% for row in candidate_rows %}
+            {% for row in day_candidate_rows %}
             <tr>
                 <td>
-                    <input type="checkbox" name="expected_flights" value="{{ row.flight.pk }}" class="expected-flight-checkbox"
+                    <input type="checkbox" name="expected_flights" value="{{ row.key }}" class="expected-flight-checkbox"
                         {% if row.selected %}checked{% endif %}>
                 </td>
                 <td>
@@ -74,6 +107,7 @@
                     <br><small>{{ row.flight.airline.name }}</small>
                 </td>
                 <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td>{{ row.operation_date|date:"d M Y" }}</td>
                 <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
                 <td>{{ row.flight.origin.iata_code|default:"-" }} → {{ row.flight.destination.iata_code|default:"-" }}</td>
                 <td>
@@ -86,23 +120,125 @@
                 <td>{{ row.flight.arrival_time|time:"H:i"|default:"-" }}</td>
                 <td>{{ row.flight.departure_time|time:"H:i"|default:"-" }}</td>
                 <td>
-                    {% if row.time_band == 'day' %}
                     <span class="status-badge status-allocated">Day</span>
-                    {% elif row.time_band == 'night' %}
+                    <br><small>{{ row.shift_label }}</small>
+                </td>
+                <td>
+                    <button type="submit" class="btn btn-secondary btn-sm"
+                        data-operation-date="{{ row.operation_date|date:'Y-m-d' }}"
+                        onclick="return submitOverrideAction('exclude_override', '{{ row.flight.pk }}', this.dataset.operationDate, 'Remove this flight from expected list for this date?');">
+                        Remove
+                    </button>
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="11" class="empty-state">No day-shift flights in the 08:30 to 18:00 window.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h3 class="section-title" style="margin-top: 1rem; margin-bottom: 0.5rem;">Night Shift Flights ({{ today|date:"d M" }} evening to {{ tomorrow|date:"d M" }} 08:30)</h3>
+    <table class="data-table schedule-table">
+        <thead>
+            <tr>
+                <th>Select</th>
+                <th>Airline</th>
+                <th>Flight No.</th>
+                <th>Operating Date</th>
+                <th>Aircraft</th>
+                <th>Route</th>
+                <th>Operation</th>
+                <th>Arrival</th>
+                <th>Departure</th>
+                <th>Shift</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in night_candidate_rows %}
+            <tr>
+                <td>
+                    <input type="checkbox" name="expected_flights" value="{{ row.key }}" class="expected-flight-checkbox"
+                        {% if row.selected %}checked{% endif %}>
+                </td>
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    <br><small>{{ row.flight.airline.name }}</small>
+                </td>
+                <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td>{{ row.operation_date|date:"d M Y" }}</td>
+                <td><span class="code-badge">{{ row.flight.aircraft_type.code }}</span></td>
+                <td>{{ row.flight.origin.iata_code|default:"-" }} → {{ row.flight.destination.iata_code|default:"-" }}</td>
+                <td>
+                    <span class="op-badge op-{{ row.flight.operation_type }}">
+                        {% if row.flight.operation_type == 'turnaround' %}Turnaround
+                        {% elif row.flight.operation_type == 'arrival' %}Arrival
+                        {% else %}Departure{% endif %}
+                    </span>
+                </td>
+                <td>{{ row.flight.arrival_time|time:"H:i"|default:"-" }}</td>
+                <td>{{ row.flight.departure_time|time:"H:i"|default:"-" }}</td>
+                <td>
                     <span class="status-badge status-conflict">Night</span>
-                    {% else %}
-                    <span class="status-badge">Unknown</span>
-                    {% endif %}
+                    <br><small>{{ row.shift_label }}</small>
+                </td>
+                <td>
+                    <button type="submit" class="btn btn-secondary btn-sm"
+                        data-operation-date="{{ row.operation_date|date:'Y-m-d' }}"
+                        onclick="return submitOverrideAction('exclude_override', '{{ row.flight.pk }}', this.dataset.operationDate, 'Remove this flight from expected list for this date?');">
+                        Remove
+                    </button>
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="11" class="empty-state">No night-shift flights for evening-to-morning window.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if excluded_rows %}
+    <h3 class="section-title" style="margin-top: 1rem; margin-bottom: 0.5rem;">Removed Flights</h3>
+    <table class="data-table schedule-table">
+        <thead>
+            <tr>
+                <th>Airline</th>
+                <th>Flight No.</th>
+                <th>Operation Date</th>
+                <th>Reason</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in excluded_rows %}
+            <tr>
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    <br><small>{{ row.flight.airline.name }}</small>
+                </td>
+                <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td>{{ row.operation_date|date:"d M Y" }}</td>
+                <td>{{ row.reason }}</td>
+                <td>
+                    <button type="submit" class="btn btn-primary btn-sm"
+                        data-operation-date="{{ row.operation_date|date:'Y-m-d' }}"
+                        onclick="return submitOverrideAction('restore_override', '{{ row.flight.pk }}', this.dataset.operationDate, 'Restore this flight to normal schedule behaviour for this date?');">
+                        Restore
+                    </button>
                 </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    {% endif %}
     {% else %}
     <div class="empty-state">
         <div class="empty-state-icon">📅</div>
         <h3>No operational flights for today</h3>
-        <p>No flights from the current season operate on {{ today|date:"F d, Y" }}.</p>
+        <p>No flights found for day or night shift windows.</p>
     </div>
     {% endif %}
 </form>
@@ -113,12 +249,14 @@
         2) Suggested Allocation Results ({{ suggested_count }} suggested, {{ conflict_count }} conflicts)
     </div>
 
+    <h3 class="section-title" style="margin-top: 0.5rem; margin-bottom: 0.5rem;">Day Shift Suggestions</h3>
     <table class="data-table schedule-table">
         <thead>
             <tr>
                 <th>Airline</th>
                 <th>Flight No.</th>
-                <th>Time Band</th>
+                <th>Operating Date</th>
+                <th>Shift</th>
                 <th>Suggested Stand</th>
                 <th>Suggested Gate</th>
                 <th>Suggested Check-in</th>
@@ -126,21 +264,17 @@
             </tr>
         </thead>
         <tbody>
-            {% for row in suggestions %}
+            {% for row in day_suggestions %}
             <tr class="{% if not row.is_suggested %}row-conflict{% else %}row-allocated{% endif %}">
                 <td>
                     <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
                     <br><small>{{ row.flight.airline.name }}</small>
                 </td>
                 <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td>{{ row.operation_date|date:"d M Y" }}</td>
                 <td>
-                    {% if row.time_band == 'day' %}
                     <span class="status-badge status-allocated">Day</span>
-                    {% elif row.time_band == 'night' %}
-                    <span class="status-badge status-conflict">Night</span>
-                    {% else %}
-                    <span class="status-badge">Unknown</span>
-                    {% endif %}
+                    <br><small>{{ row.shift_label }}</small>
                 </td>
                 <td>
                     {% if row.stand %}
@@ -153,7 +287,7 @@
                 <td>
                     {% if row.gate %}
                     <span class="resource-badge resource-gate">Gate {{ row.gate.gate.gate_number }}</span>
-                    {% if row.departure_alloc_date != today %}
+                    {% if row.departure_alloc_date != row.operation_date %}
                     <br><small>on {{ row.departure_alloc_date|date:"d M" }}</small>
                     {% endif %}
                     {% else %}
@@ -163,7 +297,7 @@
                 <td>
                     {% if row.checkin %}
                     <span class="resource-badge resource-checkin">C {{ row.checkin.counter_from }}–{{ row.checkin.counter_to }}</span>
-                    {% if row.departure_alloc_date != today %}
+                    {% if row.departure_alloc_date != row.operation_date %}
                     <br><small>on {{ row.departure_alloc_date|date:"d M" }}</small>
                     {% endif %}
                     {% else %}
@@ -182,6 +316,85 @@
                     {% endif %}
                 </td>
             </tr>
+            {% empty %}
+            <tr>
+                <td colspan="8" class="empty-state">No day-shift suggestions generated.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h3 class="section-title" style="margin-top: 1rem; margin-bottom: 0.5rem;">Night Shift Suggestions</h3>
+    <table class="data-table schedule-table">
+        <thead>
+            <tr>
+                <th>Airline</th>
+                <th>Flight No.</th>
+                <th>Operating Date</th>
+                <th>Shift</th>
+                <th>Suggested Stand</th>
+                <th>Suggested Gate</th>
+                <th>Suggested Check-in</th>
+                <th>Result</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in night_suggestions %}
+            <tr class="{% if not row.is_suggested %}row-conflict{% else %}row-allocated{% endif %}">
+                <td>
+                    <span class="airline-badge">{{ row.flight.airline.iata_code }}</span>
+                    <br><small>{{ row.flight.airline.name }}</small>
+                </td>
+                <td><strong>{{ row.flight.display_flight_numbers }}</strong></td>
+                <td>{{ row.operation_date|date:"d M Y" }}</td>
+                <td>
+                    <span class="status-badge status-conflict">Night</span>
+                    <br><small>{{ row.shift_label }}</small>
+                </td>
+                <td>
+                    {% if row.stand %}
+                    <span class="resource-badge resource-stand">Stand {{ row.stand.stand.stand_number }}</span>
+                    <br><small>{{ row.stand.start_time|time:"H:i" }} – {{ row.stand.end_time|time:"H:i" }}</small>
+                    {% else %}
+                    <span class="unallocated">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.gate %}
+                    <span class="resource-badge resource-gate">Gate {{ row.gate.gate.gate_number }}</span>
+                    {% if row.departure_alloc_date != row.operation_date %}
+                    <br><small>on {{ row.departure_alloc_date|date:"d M" }}</small>
+                    {% endif %}
+                    {% else %}
+                    <span class="unallocated">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.checkin %}
+                    <span class="resource-badge resource-checkin">C {{ row.checkin.counter_from }}–{{ row.checkin.counter_to }}</span>
+                    {% if row.departure_alloc_date != row.operation_date %}
+                    <br><small>on {{ row.departure_alloc_date|date:"d M" }}</small>
+                    {% endif %}
+                    {% else %}
+                    {% if row.flight.operation_type == 'arrival' %}
+                    <span class="na-badge">N/A</span>
+                    {% else %}
+                    <span class="unallocated">-</span>
+                    {% endif %}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.is_suggested %}
+                    <span class="status-badge status-allocated">Suggested</span>
+                    {% else %}
+                    <span class="status-badge status-conflict">Conflict</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="8" class="empty-state">No night-shift suggestions generated.</td>
+            </tr>
             {% endfor %}
         </tbody>
     </table>
@@ -193,6 +406,31 @@
 <script>
 function setAction(action) {
     document.getElementById('allocation-action').value = action;
+}
+
+function submitOverrideAction(action, flightId, operationDate, message) {
+    if (message && !confirm(message)) {
+        return false;
+    }
+    document.getElementById('allocation-action').value = action;
+    document.getElementById('override-flight-id').value = flightId;
+    document.getElementById('override-operation-date').value = operationDate;
+    return true;
+}
+
+function submitIncludeOverride() {
+    var flightId = document.getElementById('include-flight-select').value;
+    var operationDate = document.getElementById('include-date-select').value;
+
+    if (!flightId || !operationDate) {
+        alert('Select both flight and operation date.');
+        return false;
+    }
+
+    document.getElementById('allocation-action').value = 'include_override';
+    document.getElementById('override-flight-id').value = flightId;
+    document.getElementById('override-operation-date').value = operationDate;
+    return true;
 }
 
 function toggleAll(checked) {

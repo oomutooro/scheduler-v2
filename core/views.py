@@ -14,7 +14,8 @@ from urllib.parse import urlencode
 
 from core.models import (
     Airline, Airport, AircraftType, FlightRequest, ParkingStand, Gate,
-    CheckInCounter, StandAllocation, GateAllocation, CheckInAllocation, DAY_MASK
+    CheckInCounter, StandAllocation, GateAllocation, CheckInAllocation, DAY_MASK,
+    DailyOperationOverride,
 )
 from core.services.season import (
     get_current_season, get_summer_dates, get_winter_dates
@@ -464,6 +465,38 @@ def _time_band_for_flight(flight: FlightRequest) -> str:
         return 'day'
     return 'night'
 
+
+def _flight_reference_time(flight: FlightRequest):
+    """Reference time used for shift bucketing and sorting."""
+    return flight.arrival_time or flight.departure_time
+
+
+def _shift_band_for_date_ref(op_date: date, ref_time, today: date, tomorrow: date) -> str:
+    """Return day/night/invalid for this page's two-shift windows."""
+    if ref_time is None:
+        return 'invalid'
+    if op_date == today:
+        if DAY_START_TIME <= ref_time < DAY_END_TIME:
+            return 'day'
+        if ref_time >= DAY_END_TIME:
+            return 'night'
+        return 'invalid'
+    if op_date == tomorrow:
+        if ref_time < DAY_START_TIME:
+            return 'night'
+        return 'invalid'
+    return 'invalid'
+
+
+def _shift_label_for_entry(band: str, op_date: date, today: date) -> str:
+    if band == 'day':
+        return 'Today (Day Shift)'
+    if band == 'night' and op_date == today:
+        return 'Tonight (Evening)'
+    if band == 'night':
+        return 'Next Morning (Until 08:30)'
+    return 'Outside Shift Window'
+
 def schedule_view(request: HttpRequest):
     date_str = request.GET.get('date', date.today().strftime('%Y-%m-%d'))
     try:
@@ -580,36 +613,169 @@ def expected_today_allocations(request: HttpRequest):
     from core.services.allocation import allocate_stand, allocate_gate, allocate_checkin
 
     today = date.today()
-    season, year = get_season_for_date(today)
+    tomorrow = today + timedelta(days=1)
 
-    all_requests = FlightRequest.objects.filter(
-        season=season,
-        year=year,
-    ).exclude(status='cancelled').select_related('airline', 'aircraft_type', 'origin', 'destination')
+    def flights_for_operating_date(op_date: date):
+        season, year = get_season_for_date(op_date)
+        requests = FlightRequest.objects.filter(
+            season=season,
+            year=year,
+        ).exclude(status='cancelled').select_related('airline', 'aircraft_type', 'origin', 'destination')
+        return [f for f in requests if f.operates_on_date(op_date)]
 
-    candidate_flights = sorted(
-        [f for f in all_requests if f.operates_on_date(today)],
-        key=lambda x: x.arrival_time or x.departure_time or datetime.min.time(),
+    today_flights = flights_for_operating_date(today)
+    tomorrow_flights = flights_for_operating_date(tomorrow)
+
+    candidate_rows = []
+    excluded_rows = []
+    overrides_qs = DailyOperationOverride.objects.filter(
+        operation_date__in=[today, tomorrow]
+    ).select_related('flight_request', 'flight_request__airline', 'flight_request__aircraft_type', 'flight_request__origin', 'flight_request__destination')
+    override_map = {
+        (int(o.flight_request.pk), o.operation_date): o
+        for o in overrides_qs
+    }
+
+    def append_candidate(flight: FlightRequest, op_date: date, from_override: bool = False):
+        ref_time = _flight_reference_time(flight)
+        band = _shift_band_for_date_ref(op_date, ref_time, today, tomorrow)
+        if band == 'invalid':
+            return
+        candidate_rows.append({
+            'key': f"{int(flight.pk)}:{op_date.isoformat()}",
+            'flight': flight,
+            'operation_date': op_date,
+            'time_band': band,
+            'shift_label': _shift_label_for_entry(band, op_date, today),
+            'selected': False,
+            'from_override': from_override,
+        })
+
+    for flight in today_flights:
+        ov = override_map.get((int(flight.pk), today))
+        if ov and not ov.is_expected:
+            excluded_rows.append({
+                'flight': flight,
+                'operation_date': today,
+                'reason': 'Manually removed from expected list',
+            })
+            continue
+        append_candidate(flight, today)
+
+    for flight in tomorrow_flights:
+        ov = override_map.get((int(flight.pk), tomorrow))
+        if ov and not ov.is_expected:
+            excluded_rows.append({
+                'flight': flight,
+                'operation_date': tomorrow,
+                'reason': 'Manually removed from expected list',
+            })
+            continue
+        append_candidate(flight, tomorrow)
+
+    # Forced includes (for non-operating flights).
+    for ov in overrides_qs:
+        if not ov.is_expected:
+            continue
+        key = (int(ov.flight_request.pk), ov.operation_date)
+        if key in {(int(r['flight'].pk), r['operation_date']) for r in candidate_rows}:
+            continue
+        append_candidate(ov.flight_request, ov.operation_date, from_override=True)
+
+    candidate_rows = sorted(
+        candidate_rows,
+        key=lambda r: (r['time_band'], r['operation_date'], _flight_reference_time(r['flight']) or datetime.min.time()),
     )
+    candidate_by_key = {row['key']: row for row in candidate_rows}
 
-    selected_ids: set[int] = set()
+    selected_keys: set[str] = set()
     action = ''
     if request.method == 'POST':
         action = request.POST.get('action', 'generate')
-        selected_ids = {
-            int(fid)
-            for fid in request.POST.getlist('expected_flights')
-            if fid.isdigit()
+
+        if action == 'include_override':
+            flight_id = request.POST.get('override_flight_id', '').strip()
+            op_date_raw = request.POST.get('override_operation_date', '').strip()
+            try:
+                op_date = datetime.strptime(op_date_raw, '%Y-%m-%d').date()
+            except ValueError:
+                op_date = None
+
+            if not (flight_id.isdigit() and op_date):
+                messages.error(request, 'Select a valid flight and operation date.')
+                return redirect('expected_today_allocations')
+
+            flight = FlightRequest.objects.filter(id=int(flight_id)).first()
+            if not flight:
+                messages.error(request, 'Selected flight was not found.')
+                return redirect('expected_today_allocations')
+
+            band = _shift_band_for_date_ref(op_date, _flight_reference_time(flight), today, tomorrow)
+            if band == 'invalid':
+                messages.error(
+                    request,
+                    'Flight time is outside the day/night windows for the selected operation date.'
+                )
+                return redirect('expected_today_allocations')
+
+            DailyOperationOverride.objects.update_or_create(
+                flight_request=flight,
+                operation_date=op_date,
+                defaults={'is_expected': True},
+            )
+            messages.success(request, 'Flight added to expected list for the selected shift window.')
+            return redirect('expected_today_allocations')
+
+        if action in ('exclude_override', 'restore_override'):
+            flight_id = request.POST.get('override_flight_id', '').strip()
+            op_date_raw = request.POST.get('override_operation_date', '').strip()
+            try:
+                op_date = datetime.strptime(op_date_raw, '%Y-%m-%d').date()
+            except ValueError:
+                op_date = None
+
+            if not (flight_id.isdigit() and op_date):
+                messages.error(request, 'Invalid flight/date selection for override action.')
+                return redirect('expected_today_allocations')
+
+            flight = FlightRequest.objects.filter(id=int(flight_id)).first()
+            if not flight:
+                messages.error(request, 'Selected flight was not found.')
+                return redirect('expected_today_allocations')
+
+            if action == 'exclude_override':
+                DailyOperationOverride.objects.update_or_create(
+                    flight_request=flight,
+                    operation_date=op_date,
+                    defaults={'is_expected': False},
+                )
+                messages.info(request, 'Flight removed from this day/shift expected list.')
+            else:
+                DailyOperationOverride.objects.filter(
+                    flight_request=flight,
+                    operation_date=op_date,
+                ).delete()
+                messages.success(request, 'Daily override cleared; default schedule applies again.')
+
+            return redirect('expected_today_allocations')
+
+        selected_keys = {
+            val.strip()
+            for val in request.POST.getlist('expected_flights')
+            if val.strip() in candidate_by_key
         }
 
-    selected_flights = [f for f in candidate_flights if int(f.pk) in selected_ids]
+    for row in candidate_rows:
+        row['selected'] = row['key'] in selected_keys
+
+    selected_entries = [candidate_by_key[key] for key in selected_keys if key in candidate_by_key]
 
     suggestions = []
     suggested_count = 0
     conflict_count = 0
 
     if request.method == 'POST':
-        if not selected_flights:
+        if not selected_entries:
             messages.warning(request, 'Select at least one expected flight for today.')
         else:
             # Keep priority ordering consistent with the daily allocator.
@@ -619,26 +785,50 @@ def expected_today_allocations(request: HttpRequest):
                     p_val = 2
                 elif f.airline.is_home_airline:
                     p_val = 1
-                return (-p_val, f.arrival_time or datetime.min.time())
+                return (-p_val, _flight_reference_time(f) or datetime.min.time())
 
-            prioritized_flights = sorted(selected_flights, key=flight_priority_key)
+            selected_entries = sorted(
+                selected_entries,
+                key=lambda row: (
+                    row['operation_date'],
+                    flight_priority_key(row['flight']),
+                )
+            )
+
+            flights_by_date: dict[date, list[FlightRequest]] = {}
+            for row in selected_entries:
+                flights_by_date.setdefault(row['operation_date'], []).append(row['flight'])
 
             if action == 'apply':
                 # Persist allocations for the selected expected flights.
                 with transaction.atomic():
-                    StandAllocation.objects.filter(date=today).delete()
-                    GateAllocation.objects.filter(date=today).delete()
-                    CheckInAllocation.objects.filter(date=today).delete()
-
                     alloc_cache: dict[str, Any] = {}
-                    for flight in prioritized_flights:
+                    for row in selected_entries:
+                        flight = row['flight']
+                        operation_date = row['operation_date']
+                        same_shift_flights = flights_by_date.get(operation_date, [flight])
+
+                        departure_alloc_date = operation_date + flight.departure_date_offset
+
+                        StandAllocation.objects.filter(
+                            flight_request=flight,
+                            date=operation_date,
+                        ).delete()
+                        GateAllocation.objects.filter(
+                            flight_request=flight,
+                            date=departure_alloc_date,
+                        ).delete()
+                        CheckInAllocation.objects.filter(
+                            flight_request=flight,
+                            date=departure_alloc_date,
+                        ).delete()
+
                         stand = allocate_stand(
                             flight,
-                            today,
+                            operation_date,
                             alloc_cache=alloc_cache,
-                            all_day_flights=prioritized_flights,
+                            all_day_flights=same_shift_flights,
                         )
-                        departure_alloc_date = today + flight.departure_date_offset
                         gate = allocate_gate(
                             flight,
                             departure_alloc_date,
@@ -648,7 +838,7 @@ def expected_today_allocations(request: HttpRequest):
                             flight,
                             departure_alloc_date,
                             alloc_cache=alloc_cache,
-                            all_day_flights=prioritized_flights,
+                            all_day_flights=same_shift_flights,
                         )
 
                         is_suggested = bool(stand or gate or checkin)
@@ -662,6 +852,8 @@ def expected_today_allocations(request: HttpRequest):
 
                         suggestions.append({
                             'flight': flight,
+                            'operation_date': operation_date,
+                            'shift_label': row['shift_label'],
                             'time_band': _time_band_for_flight(flight),
                             'stand': stand,
                             'gate': gate,
@@ -679,21 +871,33 @@ def expected_today_allocations(request: HttpRequest):
                 with transaction.atomic():
                     simulation_sp = transaction.savepoint()
 
-                    # Remove same-day allocations inside the simulation so suggestions
-                    # reflect the selected scenario only.
-                    StandAllocation.objects.filter(date=today).delete()
-                    GateAllocation.objects.filter(date=today).delete()
-                    CheckInAllocation.objects.filter(date=today).delete()
-
                     alloc_cache: dict[str, Any] = {}
-                    for flight in prioritized_flights:
+                    for row in selected_entries:
+                        flight = row['flight']
+                        operation_date = row['operation_date']
+                        same_shift_flights = flights_by_date.get(operation_date, [flight])
+
+                        departure_alloc_date = operation_date + flight.departure_date_offset
+
+                        StandAllocation.objects.filter(
+                            flight_request=flight,
+                            date=operation_date,
+                        ).delete()
+                        GateAllocation.objects.filter(
+                            flight_request=flight,
+                            date=departure_alloc_date,
+                        ).delete()
+                        CheckInAllocation.objects.filter(
+                            flight_request=flight,
+                            date=departure_alloc_date,
+                        ).delete()
+
                         stand = allocate_stand(
                             flight,
-                            today,
+                            operation_date,
                             alloc_cache=alloc_cache,
-                            all_day_flights=prioritized_flights,
+                            all_day_flights=same_shift_flights,
                         )
-                        departure_alloc_date = today + flight.departure_date_offset
                         gate = allocate_gate(
                             flight,
                             departure_alloc_date,
@@ -703,7 +907,7 @@ def expected_today_allocations(request: HttpRequest):
                             flight,
                             departure_alloc_date,
                             alloc_cache=alloc_cache,
-                            all_day_flights=prioritized_flights,
+                            all_day_flights=same_shift_flights,
                         )
 
                         is_suggested = bool(stand or gate or checkin)
@@ -714,6 +918,8 @@ def expected_today_allocations(request: HttpRequest):
 
                         suggestions.append({
                             'flight': flight,
+                            'operation_date': operation_date,
+                            'shift_label': row['shift_label'],
                             'time_band': _time_band_for_flight(flight),
                             'stand': stand,
                             'gate': gate,
@@ -735,22 +941,32 @@ def expected_today_allocations(request: HttpRequest):
                         'No complete allocation suggestions were found for the selected flights.'
                     )
 
-    candidate_rows = [
-        {
-            'flight': flight,
-            'time_band': _time_band_for_flight(flight),
-            'selected': int(flight.pk) in selected_ids,
-        }
-        for flight in candidate_flights
-    ]
+    day_candidate_rows = [row for row in candidate_rows if row['time_band'] == 'day']
+    night_candidate_rows = [row for row in candidate_rows if row['time_band'] == 'night']
+    day_suggestions = [row for row in suggestions if row['time_band'] == 'day']
+    night_suggestions = [row for row in suggestions if row['time_band'] == 'night']
+    override_option_map = {int(r['flight'].pk): r['flight'] for r in candidate_rows}
+    for f in FlightRequest.objects.exclude(status='cancelled').select_related('airline').order_by('airline__name', 'arrival_flight_number')[:250]:
+        override_option_map.setdefault(int(f.pk), f)
+    override_flight_options = sorted(
+        list(override_option_map.values()),
+        key=lambda f: (f.airline.name, f.display_flight_numbers),
+    )
 
     context = {
         'today': today,
+        'tomorrow': tomorrow,
         'candidate_rows': candidate_rows,
-        'selected_count': len(selected_flights),
-        'day_count': sum(1 for row in candidate_rows if row['time_band'] == 'day'),
-        'night_count': sum(1 for row in candidate_rows if row['time_band'] == 'night'),
+        'day_candidate_rows': day_candidate_rows,
+        'night_candidate_rows': night_candidate_rows,
+        'excluded_rows': excluded_rows,
+        'override_flight_options': override_flight_options,
+        'selected_count': len(selected_entries),
+        'day_count': len(day_candidate_rows),
+        'night_count': len(night_candidate_rows),
         'suggestions': suggestions,
+        'day_suggestions': day_suggestions,
+        'night_suggestions': night_suggestions,
         'suggested_count': suggested_count,
         'conflict_count': conflict_count,
         'active_page': 'schedule_expected',

@@ -367,3 +367,31 @@ class CheckInAllocation(models.Model):
     @property
     def counter_count(self):
         return self.counter_to - self.counter_from + 1
+
+
+# ─── Daily Operational Overrides ─────────────────────────────────────────────
+
+class DailyOperationOverride(models.Model):
+    """
+    Manual override for whether a flight is expected on a specific operational day.
+    is_expected=True: force include even if schedule does not operate.
+    is_expected=False: force exclude even if schedule normally operates.
+    """
+    flight_request = models.ForeignKey(
+        FlightRequest,
+        on_delete=models.CASCADE,
+        related_name='daily_overrides',
+    )
+    operation_date = models.DateField()
+    is_expected = models.BooleanField(default=True)
+    note = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-operation_date', 'flight_request_id']
+        unique_together = ('flight_request', 'operation_date')
+
+    def __str__(self):
+        state = 'Expected' if self.is_expected else 'Not Expected'
+        return f"{self.flight_request} on {self.operation_date}: {state}"
