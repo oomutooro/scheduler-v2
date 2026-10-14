@@ -21,6 +21,7 @@ urlpatterns = [
 
     # Daily Schedule
     path('schedule/', views.schedule_view, name='schedule'),
+    path('schedule/expected-today/', views.expected_today_allocations, name='expected_today_allocations'),
     path('schedule/allocate/', views.schedule_allocate, name='schedule_allocate'),
     path('schedule/clear/', views.schedule_clear, name='schedule_clear'),
     path('schedule/<int:flight_id>/allocate-manual/', views.schedule_allocate_manual, name='schedule_allocate_manual'),

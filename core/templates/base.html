@@ -30,7 +30,7 @@
                 <li><a href="{% url 'season_allocations' %}" class="nav-link {% if active_page == 'allocations' %}active{% endif %}">
                     <span class="nav-icon">⚙</span> Allocations
                 </a></li>
-                <li><a href="{% url 'schedule' %}" class="nav-link {% if active_page == 'schedule' %}active{% endif %}">
+                <li><a href="{% url 'schedule' %}" class="nav-link {% if active_page == 'schedule' or active_page == 'schedule_expected' %}active{% endif %}">
                     <span class="nav-icon">📅</span> Daily Schedule
                 </a></li>
                 <li><a href="{% url 'reports' %}" class="nav-link {% if active_page == 'reports' %}active{% endif %}">
