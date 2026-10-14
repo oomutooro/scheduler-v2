@@ -1,0 +1,14 @@
+{% if usage.rows %}
+<div class="heat-scroll">
+    <div class="heat" id="{{ anchor }}">
+        <div class="lbl"></div>{% for c in usage.rows.0.cells %}<div class="hr">{{ c.hour|stringformat:"02d" }}</div>{% endfor %}
+        {% for row in usage.rows %}
+        <div class="lbl">{{ row.label }}</div>
+        {% for c in row.cells %}<div class="cell{% if c.intensity > 0.55 %} dark{% endif %}" style="{{ c.style }}" title="{{ row.label }} {{ c.hour|stringformat:'02d' }}:00 — occupied on {{ c.days }} dates ({{ c.percent }}%)">{% if c.percent >= 1 %}{{ c.percent|floatformat:"0" }}{% endif %}</div>{% endfor %}
+        {% endfor %}
+    </div>
+</div>
+<div class="legend"><span>0%</span><i></i><span>Most used</span></div>
+{% else %}
+<p class="muted">No active resources are defined.</p>
+{% endif %}

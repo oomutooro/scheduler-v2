@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Season Analytics - Scheduler v2{% endblock %}
+
+{% block extra_head %}
+<style>
+    .rpt-header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: var(--spacing-6); border-radius: var(--radius); margin-bottom: var(--spacing-4); }
+    .rpt-header h1 { color: #fff; margin: 0 0 4px; }
+    .rpt-header p { margin: 0; opacity: .85; }
+    .rpt-controls { display: flex; gap: var(--spacing-3); align-items: end; flex-wrap: wrap; background: var(--surface-light); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--spacing-4); margin-bottom: var(--spacing-4); }
+    .rpt-controls .form-group { margin: 0; }
+    .rpt-controls .spacer { flex: 1; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--spacing-3); margin-bottom: var(--spacing-4); }
+    .kpi { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--radius); padding: 12px 14px; }
+    .kpi small { display: block; color: var(--text-secondary); font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; }
+    .kpi strong { font-size: 1.35rem; }
+    .kpi span { display: block; font-size: .78rem; color: var(--text-secondary); margin-top: 2px; }
+    .kpi.busy { border-left-color: var(--danger); }
+    .kpi.quiet { border-left-color: var(--success); }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--spacing-4); margin-bottom: var(--spacing-4); }
+    .panel h2 { margin: 0 0 4px; font-size: 1.05rem; }
+    .panel p.hint { margin: 0 0 12px; color: var(--text-secondary); font-size: .84rem; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: var(--spacing-4); }
+    .chart-box { position: relative; height: 290px; }
+    .chart-box.tall { height: 340px; }
+    .heat-scroll { overflow-x: auto; }
+    .heat { display: grid; grid-template-columns: 96px repeat(24, minmax(30px, 1fr)); min-width: 860px; gap: 2px; }
+    .heat .lbl { display: flex; align-items: center; font-weight: 600; font-size: .78rem; padding-left: 6px; }
+    .heat .hr { text-align: center; font-size: .7rem; color: var(--text-secondary); }
+    .heat .cell { min-height: 30px; display: flex; align-items: center; justify-content: center; font-size: .68rem; border-radius: 3px; border: 1px solid var(--border-light); background-color: #fff; }
+    .heat .cell.dark { color: #fff; }
+    .legend { display: flex; align-items: center; gap: 8px; font-size: .78rem; color: var(--text-secondary); margin-top: 10px; }
+    .legend i { width: 160px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, #fff, rgb(26, 86, 219)); border: 1px solid var(--border); }
+    table.rpt { width: 100%; border-collapse: collapse; font-size: .84rem; }
+    table.rpt th { text-align: left; padding: 6px 10px; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+    table.rpt td { padding: 6px 10px; border-bottom: 1px solid var(--border-light); }
+    table.rpt td.n, table.rpt th.n { text-align: right; }
+    .bar-cell { height: 8px; background: var(--primary); border-radius: 4px; min-width: 2px; }
+    .muted { color: var(--text-secondary); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rpt-header">
+    <h1>{{ season|title }} {{ year }} Schedule Analytics</h1>
+    <p>How busy each day is, when the airport is busiest and quietest, which aircraft fly most, and how gates, counters and stands are used. Times are EAT.</p>
+</div>
+
+<form method="get" class="rpt-controls">
+    <div class="form-group">
+        <label class="form-label" for="season">Season</label>
+        <select class="form-control" id="season" name="season">
+            <option value="winter" {% if season == 'winter' %}selected{% endif %}>Winter</option>
+            <option value="summer" {% if season == 'summer' %}selected{% endif %}>Summer</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="year">Year</label>
+        <input class="form-control" id="year" name="year" type="number" min="2020" max="2099" value="{{ year }}" style="width: 90px;">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="start">From</label>
+        <input class="form-control" id="start" name="start" type="date" value="{{ start|date:'Y-m-d' }}">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="end">To</label>
+        <input class="form-control" id="end" name="end" type="date" value="{{ end|date:'Y-m-d' }}">
+    </div>
+    <button class="btn btn-primary" type="submit">Update</button>
+    <div class="spacer"></div>
+    <a class="btn btn-secondary" id="export-analytics-xlsx" href="{% url 'season_analytics_export' 'xlsx' %}?season={{ season }}&year={{ year }}&start={{ start|date:'Y-m-d' }}&end={{ end|date:'Y-m-d' }}">Export Excel</a>
+    <a class="btn btn-secondary" id="export-analytics-pdf" href="{% url 'season_analytics_export' 'pdf' %}?season={{ season }}&year={{ year }}&start={{ start|date:'Y-m-d' }}&end={{ end|date:'Y-m-d' }}">Export PDF</a>
+</form>
+
+{% if total_movements %}
+<div class="kpi-grid">
+    <div class="kpi"><small>Total movements</small><strong>{{ total_movements }}</strong><span>{{ arrivals }} arrivals · {{ departures }} departures</span></div>
+    <div class="kpi"><small>Average per day</small><strong>{{ avg_per_day }}</strong><span>{{ total_days }} days · {{ flight_requests }} flight requests</span></div>
+    <div class="kpi busy"><small>Busiest weekday</small><strong>{{ busiest_weekday.name }}</strong><span>{{ busiest_weekday.total }} movements / day</span></div>
+    <div class="kpi quiet"><small>Quietest weekday</small><strong>{{ quietest_weekday.name }}</strong><span>{{ quietest_weekday.total }} movements / day</span></div>
+    <div class="kpi busy"><small>Busiest date</small><strong>{{ busiest_day.date|date:"D d M" }}</strong><span>{{ busiest_day.total }} movements</span></div>
+    <div class="kpi busy"><small>Busiest hour</small><strong>{{ busiest_hours.0.label }}</strong><span>{{ busiest_hours.0.total }} movements in total</span></div>
+    <div class="kpi quiet"><small>Quietest hours</small><strong>{% for h in quiet_hours|slice:":4" %}{{ h }}{% if not forloop.last %}, {% endif %}{% endfor %}</strong><span>{{ quiet_hours_count }} movements each{% if quiet_hours|length > 4 %} (+{{ quiet_hours|length|add:"-4" }} more){% endif %}</span></div>
+    <div class="kpi"><small>Departures with a gate</small><strong>{{ allocation_coverage }}%</strong><span>share of departures allocated</span></div>
+</div>
+
+<div class="grid-2">
+    <div class="panel">
+        <h2>Which days are busy</h2>
+        <p class="hint">Average arrivals and departures per day of the week.</p>
+        <div class="chart-box"><canvas id="chartWeekday"></canvas></div>
+    </div>
+    <div class="panel">
+        <h2>Which time of day is busy</h2>
+        <p class="hint">Total movements by hour across the whole period.</p>
+        <div class="chart-box"><canvas id="chartHour"></canvas></div>
+    </div>
+</div>
+
+<div class="panel">
+    <h2>Heatmap: weekday × hour</h2>
+    <p class="hint">Average number of movements in each hour of each weekday. Darker is busier; blank cells have no movements.</p>
+    <div class="heat-scroll">
+        <div class="heat" id="heatmap-weekday">
+            <div class="lbl"></div>{% for h in hour_rows %}<div class="hr">{{ h.hour|stringformat:"02d" }}</div>{% endfor %}
+            {% for row in heat_rows %}
+            <div class="lbl">{{ row.name }}</div>
+            {% for c in row.cells %}<div class="cell{% if c.intensity > 0.55 %} dark{% endif %}" style="{{ c.style }}" title="{{ row.name }} {{ c.hour|stringformat:'02d' }}:00 — {{ c.value }} movements on average">{% if c.value %}{{ c.value|floatformat:"-1" }}{% endif %}</div>{% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+    <div class="legend"><span>None</span><i></i><span>Peak ({{ heat_peak }})</span></div>
+</div>
+
+<div class="panel">
+    <h2>Movements on every date</h2>
+    <p class="hint">Arrivals and departures per date across the period.</p>
+    <div class="chart-box tall"><canvas id="chartDates"></canvas></div>
+</div>
+
+<div class="grid-2">
+    <div class="panel">
+        <h2>Aircraft types used</h2>
+        <p class="hint">Most used aircraft types by movements (top 10).</p>
+        <div class="chart-box"><canvas id="chartAircraft"></canvas></div>
+    </div>
+    <div class="panel">
+        <h2>Aircraft size mix</h2>
+        <p class="hint">Share of movements by ICAO size code.</p>
+        <div class="chart-box"><canvas id="chartSize"></canvas></div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="panel">
+        <h2>Aircraft ranking</h2>
+        <table class="rpt">
+            <thead><tr><th>Type</th><th>Name</th><th>Size</th><th class="n">Movements</th><th class="n">Share</th></tr></thead>
+            <tbody>{% for r in aircraft_rows %}<tr><td><strong>{{ r.code }}</strong></td><td>{{ r.name }}</td><td>{{ r.size }}</td><td class="n">{{ r.movements }}</td><td class="n">{{ r.share }}%</td></tr>{% endfor %}</tbody>
+        </table>
+    </div>
+    <div class="panel">
+        <h2>Airlines by movements</h2>
+        <div class="chart-box"><canvas id="chartAirline"></canvas></div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="panel">
+        <h2>Busiest dates</h2>
+        <table class="rpt">
+            <thead><tr><th>Date</th><th>Day</th><th class="n">Arr</th><th class="n">Dep</th><th class="n">Total</th></tr></thead>
+            <tbody>{% for r in busiest_dates %}<tr><td>{{ r.date|date:"d M Y" }}</td><td>{{ r.weekday }}</td><td class="n">{{ r.arr }}</td><td class="n">{{ r.dep }}</td><td class="n"><strong>{{ r.total }}</strong></td></tr>{% endfor %}</tbody>
+        </table>
+    </div>
+    <div class="panel">
+        <h2>Quietest dates</h2>
+        <table class="rpt">
+            <thead><tr><th>Date</th><th>Day</th><th class="n">Arr</th><th class="n">Dep</th><th class="n">Total</th></tr></thead>
+            <tbody>{% for r in quietest_dates %}<tr><td>{{ r.date|date:"d M Y" }}</td><td>{{ r.weekday }}</td><td class="n">{{ r.arr }}</td><td class="n">{{ r.dep }}</td><td class="n"><strong>{{ r.total }}</strong></td></tr>{% endfor %}</tbody>
+        </table>
+    </div>
+</div>
+
+<div class="panel">
+    <h2>Gate usage</h2>
+    <p class="hint">Percentage of dates in the period that each gate is occupied, per hour (from saved gate allocations).</p>
+    {% include "reports/_usage_heat.html" with usage=resources.gates anchor="heatmap-gates" %}
+    <div class="chart-box"><canvas id="chartGates"></canvas></div>
+</div>
+
+<div class="panel">
+    <h2>Check-in counter usage</h2>
+    <p class="hint">Percentage of dates in the period that each counter is occupied, per hour.</p>
+    {% include "reports/_usage_heat.html" with usage=resources.counters anchor="heatmap-counters" %}
+    <div class="chart-box"><canvas id="chartCounters"></canvas></div>
+</div>
+
+<div class="panel">
+    <h2>Stand usage</h2>
+    <p class="hint">Percentage of dates in the period that each stand is occupied, per hour.</p>
+    {% include "reports/_usage_heat.html" with usage=resources.stands anchor="heatmap-stands" %}
+</div>
+
+{{ charts|json_script:"chart-data" }}
+{% else %}
+<div class="empty-state"><h3>No flights in this period</h3><p>Adjust the season, year or dates above.</p></div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if total_movements %}
+<script src="{% static 'js/chart.min.js' %}"></script>
+<script>
+    (function () {
+        var d = JSON.parse(document.getElementById('chart-data').textContent);
+        var blue = 'rgba(26, 86, 219, 0.85)', amber = 'rgba(245, 158, 11, 0.9)';
+        var palette = ['#1a56db', '#f59e0b', '#057a55', '#c81e1e', '#7e3af2', '#0ea5e9', '#64748b', '#ec4899', '#14b8a6', '#a16207'];
+        function bar(id, labels, sets, opts) {
+            opts = opts || {};
+            new Chart(document.getElementById(id), {
+                type: 'bar',
+                data: { labels: labels, datasets: sets },
+                options: {
+                    maintainAspectRatio: false, indexAxis: opts.horizontal ? 'y' : 'x',
+                    scales: { x: { stacked: !!opts.stacked, ticks: { maxRotation: 90, autoSkip: true } }, y: { stacked: !!opts.stacked, beginAtZero: true } },
+                    plugins: { legend: { display: sets.length > 1 } }
+                }
+            });
+        }
+        function pie(id, labels, values) {
+            new Chart(document.getElementById(id), {
+                type: 'doughnut',
+                data: { labels: labels, datasets: [{ data: values, backgroundColor: palette }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+            });
+        }
+        bar('chartWeekday', d.weekdays, [{ label: 'Arrivals / day', data: d.weekday_arr, backgroundColor: blue }, { label: 'Departures / day', data: d.weekday_dep, backgroundColor: amber }]);
+        bar('chartHour', d.hours, [{ label: 'Arrivals', data: d.hour_arr, backgroundColor: blue }, { label: 'Departures', data: d.hour_dep, backgroundColor: amber }], { stacked: true });
+        bar('chartDates', d.dates, [{ label: 'Arrivals', data: d.date_arr, backgroundColor: blue }, { label: 'Departures', data: d.date_dep, backgroundColor: amber }], { stacked: true });
+        bar('chartAircraft', d.aircraft, [{ label: 'Movements', data: d.aircraft_counts, backgroundColor: blue }]);
+        pie('chartSize', d.sizes, d.size_counts);
+        bar('chartAirline', d.airlines, [{ label: 'Movements', data: d.airline_counts, backgroundColor: blue }]);
+        if (document.getElementById('chartGates')) { bar('chartGates', d.gate_labels, [{ label: 'Gate allocations', data: d.gate_counts, backgroundColor: blue }]); }
+        if (document.getElementById('chartCounters')) { bar('chartCounters', d.counter_labels, [{ label: 'Counter allocations', data: d.counter_counts, backgroundColor: amber }]); }
+    })();
+</script>
+{% endif %}
+{% endblock %}

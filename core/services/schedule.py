@@ -5,6 +5,7 @@ Provides helpers for generating daily flight lists from seasonal flight requests
 
 from datetime import date
 from typing import List
+from django.db.models import Q
 from core.models import FlightRequest
 from core.services.season import get_season_for_date
 
@@ -21,7 +22,8 @@ def get_flights_for_date(selected_date: date) -> List[FlightRequest]:
     season, year = get_season_for_date(selected_date)
 
     candidates = FlightRequest.objects.filter(
-        season=season, year=year
+        Q(season=season, year=year)
+        | Q(valid_from__lte=selected_date, valid_to__gte=selected_date)
     ).select_related('airline', 'aircraft_type', 'origin', 'destination')
 
     return [f for f in candidates if f.operates_on_date(selected_date)]

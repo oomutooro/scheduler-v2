@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Daily Flight Schedule - Scheduler v2{% endblock %}
+
+{% block extra_head %}
+<style>
+    .rpt-header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: var(--spacing-6); border-radius: var(--radius); margin-bottom: var(--spacing-4); }
+    .rpt-header h1 { color: #fff; margin: 0 0 4px; }
+    .rpt-header p { margin: 0; opacity: .85; }
+    .rpt-controls { display: flex; gap: var(--spacing-3); align-items: end; flex-wrap: wrap; background: var(--surface-light); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--spacing-4); margin-bottom: var(--spacing-4); }
+    .rpt-controls .form-group { margin: 0; }
+    .rpt-controls .spacer { flex: 1; }
+    .day-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--spacing-4); }
+    .day-nav a { font-size: .82rem; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); text-decoration: none; color: var(--text); background: var(--surface); }
+    .day-nav a:hover { background: var(--primary-light); }
+    .day-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: var(--spacing-4); overflow: hidden; }
+    .day-block header { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 14px; background: var(--primary-light); border-bottom: 1px solid var(--border); }
+    .day-block header h2 { margin: 0; font-size: 1.05rem; }
+    .day-block header span { font-size: .82rem; color: var(--text-secondary); }
+    .day-block table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+    .day-block th { text-align: left; padding: 7px 10px; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .day-block td { padding: 6px 10px; border-bottom: 1px solid var(--border-light); }
+    .day-block td.split, .day-block th.split { border-left: 2px solid var(--border); }
+    .time-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .muted { color: var(--text-secondary); }
+    .nextday { font-size: .7rem; color: var(--warning); font-weight: 700; margin-left: 2px; }
+    .empty-day { padding: 14px; color: var(--text-secondary); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rpt-header">
+    <h1>Daily Flight Schedule</h1>
+    <p>The weekly pattern, Monday to Sunday, ordered from 00:00 to 23:59 (EAT). It repeats every week.</p>
+</div>
+
+<form method="get" class="rpt-controls">
+    <div class="form-group">
+        <label class="form-label" for="season">Season</label>
+        <select class="form-control" id="season" name="season">
+            <option value="winter" {% if season == 'winter' %}selected{% endif %}>Winter</option>
+            <option value="summer" {% if season == 'summer' %}selected{% endif %}>Summer</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="year">Year</label>
+        <input class="form-control" id="year" name="year" type="number" min="2020" max="2099" value="{{ year }}" style="width: 90px;">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="start">Period from</label>
+        <input class="form-control" id="start" name="start" type="date" value="{{ start|date:'Y-m-d' }}">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="end">Period to</label>
+        <input class="form-control" id="end" name="end" type="date" value="{{ end|date:'Y-m-d' }}">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="direction">Show</label>
+        <select class="form-control" id="direction" name="direction">
+            <option value="" {% if not direction %}selected{% endif %}>Arrivals and departures</option>
+            <option value="arrival" {% if direction == 'arrival' %}selected{% endif %}>Arrivals only</option>
+            <option value="departure" {% if direction == 'departure' %}selected{% endif %}>Departures only</option>
+        </select>
+    </div>
+    <button class="btn btn-primary" type="submit">Update</button>
+    <div class="spacer"></div>
+    <a class="btn btn-secondary" id="export-daily-xlsx" href="{% url 'daily_flights_export' 'xlsx' %}?season={{ season }}&year={{ year }}&start={{ start|date:'Y-m-d' }}&end={{ end|date:'Y-m-d' }}&direction={{ direction }}">Export Excel</a>
+    <a class="btn btn-secondary" id="export-daily-pdf" href="{% url 'daily_flights_export' 'pdf' %}?season={{ season }}&year={{ year }}&start={{ start|date:'Y-m-d' }}&end={{ end|date:'Y-m-d' }}&direction={{ direction }}">Export PDF</a>
+</form>
+
+{% if total_rows %}
+<p class="muted">Flights are listed on the weekday they arrive. A departure marked <span class="nextday">+1</span> leaves the following day, linked to its inbound. Use the period dates to see only the flights that run within a given time span.</p>
+<nav class="day-nav" aria-label="Jump to day">
+    {% for day in days %}<a href="#day-{{ day.weekday|lower }}">{{ day.weekday }}</a>{% endfor %}
+</nav>
+
+{% for day in days %}
+<section class="day-block" id="day-{{ day.weekday|lower }}">
+    <header>
+        <h2>{{ day.weekday }}</h2>
+        <span>{{ day.arrivals }} arrivals · {{ day.departures }} departures</span>
+    </header>
+    {% if day.rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Airline</th>
+                <th>Arr Flight</th><th>Arr Time</th><th>From</th>
+                <th class="split">Dep Flight</th><th>Dep Time</th><th>To</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in day.rows %}
+            <tr>
+                <td>{{ r.airline }}</td>
+                <td><strong>{{ r.arr_flight|default:"" }}</strong></td>
+                <td class="time-cell">{{ r.arr_time|time:"H:i"|default:"" }}</td>
+                <td>{{ r.origin }}</td>
+                <td class="split"><strong>{{ r.dep_flight|default:"" }}</strong></td>
+                <td class="time-cell">{{ r.dep_time|time:"H:i"|default:"" }}{% if r.next_day %}<span class="nextday" title="Departs the following day">+1</span>{% endif %}</td>
+                <td>{{ r.destination }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-day">No flights on this day.</div>
+    {% endif %}
+</section>
+{% endfor %}
+{% else %}
+<div class="empty-state"><h3>No flights in this period</h3><p>Adjust the season, year or dates above.</p></div>
+{% endif %}
+{% endblock %}

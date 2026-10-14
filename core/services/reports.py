@@ -1,7 +1,88 @@
 from django.db.models import Count
+from datetime import date
 from collections import defaultdict
 from typing import Any
 from core.models import FlightRequest
+
+
+def generate_counter_usage_report(season: str, year: int, selected_date: date) -> dict[str, Any]:
+    """Build average-season and selected-day check-in counter visualisation data."""
+    from core.models import CheckInAllocation, CheckInCounter
+    from core.services.season import get_season_dates
+
+    season_start, season_end = get_season_dates(season, year)
+    total_days = (season_end - season_start).days + 1
+    counters = list(CheckInCounter.objects.filter(is_active=True).order_by('counter_number'))
+    counter_numbers = [counter.counter_number for counter in counters]
+
+    allocations = list(
+        CheckInAllocation.objects.filter(
+            date__range=(season_start, season_end),
+        ).select_related('flight_request__airline').order_by('date', 'start_time')
+    )
+
+    usage = {
+        counter_number: [set() for _ in range(24)]
+        for counter_number in counter_numbers
+    }
+
+    def hour_range(start_time, end_time):
+        start = start_time.hour * 60 + start_time.minute
+        end = end_time.hour * 60 + end_time.minute
+        if end <= start:
+            end += 24 * 60
+        return range(start // 60, (end + 59) // 60)
+
+    for allocation in allocations:
+        for counter_number in range(allocation.counter_from, allocation.counter_to + 1):
+            if counter_number not in usage:
+                continue
+            for hour in hour_range(allocation.start_time, allocation.end_time):
+                usage[counter_number][hour % 24].add(allocation.date)
+
+    heatmap_rows = []
+    for counter_number in counter_numbers:
+        cells = []
+        for hour in range(24):
+            percent = round((len(usage[counter_number][hour]) / total_days) * 100, 1)
+            cells.append({'hour': hour, 'percent': percent})
+        heatmap_rows.append({'counter': counter_number, 'cells': cells})
+
+    selected_allocations = [
+        allocation for allocation in allocations if allocation.date == selected_date
+    ]
+    daily_rows = []
+    for allocation in selected_allocations:
+        start = allocation.start_time.hour * 60 + allocation.start_time.minute
+        end = allocation.end_time.hour * 60 + allocation.end_time.minute
+        if end <= start:
+            end += 24 * 60
+        flight = allocation.flight_request
+        daily_rows.append({
+            'flight': f"{flight.airline.iata_code} {flight.display_flight_numbers}",
+            'airline': flight.airline.name,
+            'counter_range': f"C{allocation.counter_from}-{allocation.counter_to}",
+            'start': allocation.start_time.strftime('%H:%M'),
+            'end': allocation.end_time.strftime('%H:%M'),
+            'left_percent': round((start / 1440) * 100, 3),
+            'width_percent': round(((end - start) / 1440) * 100, 3),
+            'counter_from': allocation.counter_from,
+            'counter_to': allocation.counter_to,
+        })
+
+    return {
+        'season': season,
+        'year': year,
+        'season_start': season_start,
+        'season_end': season_end,
+        'selected_date': selected_date,
+        'counter_numbers': counter_numbers,
+        'heatmap_rows': heatmap_rows,
+        'daily_rows': daily_rows,
+        'allocated_counter_records': len(allocations),
+        'selected_day_records': len(selected_allocations),
+        'total_days': total_days,
+    }
 
 def generate_report_data(season: str, year: int) -> dict[str, Any]:
     """Generate all analytical data required for the reports dashboard."""

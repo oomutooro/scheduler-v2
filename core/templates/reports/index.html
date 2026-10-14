@@ -51,5 +51,25 @@
         <h3>Season Schedule</h3>
         <p>Flight schedule in IATA season format  ARR/DEP rows with days-of-week, link flights and aircraft type.</p>
     </a>
+    <a href="{% url 'daily_flights_report' %}?season=winter" class="report-tile">
+        <div class="report-tile-icon">🗓</div>
+        <h3>Daily Flight Schedule</h3>
+        <p>Every arrival and departure day by day, ordered 00:00–23:59, with stand, gate and counters. Export to PDF or Excel.</p>
+    </a>
+    <a href="{% url 'flight_summary_report' %}?season=winter" class="report-tile">
+        <div class="report-tile-icon">✈</div>
+        <h3>Flight Summary</h3>
+        <p>All slotted airlines and flights in one list ordered by time, split into passenger and cargo, with operating days. Export to Excel.</p>
+    </a>
+    <a href="{% url 'season_analytics' %}?season=winter" class="report-tile">
+        <div class="report-tile-icon">📈</div>
+        <h3>Season Analytics</h3>
+        <p>Busy days and hours, weekday × hour heatmap, aircraft usage, plus gate, counter and stand usage. Export to PDF or Excel.</p>
+    </a>
+    <a href="{% url 'counter_usage_report' %}?season=winter&year={{ year }}" class="report-tile">
+        <div class="report-tile-icon">▦</div>
+        <h3>Counter Usage</h3>
+        <p>Season-average counter heat map plus a selected-day timeline showing every flight's check-in window.</p>
+    </a>
 </div>
 {% endblock %}

@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Counter Usage Report - Scheduler v2{% endblock %}
+
+{% block extra_head %}
+<style>
+    .counter-report-header {
+        background: linear-gradient(135deg, var(--primary), var(--primary-light));
+        color: white;
+        padding: var(--spacing-6);
+        border-radius: var(--radius);
+        margin-bottom: var(--spacing-4);
+    }
+    .report-controls {
+        display: flex;
+        gap: var(--spacing-3);
+        align-items: end;
+        flex-wrap: wrap;
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-4);
+        margin-bottom: var(--spacing-4);
+    }
+    .report-controls .form-group { margin: 0; min-width: 150px; }
+    .report-controls .form-control { min-width: 140px; }
+    .report-section {
+        background: var(--surface-light);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--spacing-4);
+        margin-bottom: var(--spacing-4);
+    }
+    .section-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; flex-wrap: wrap; }
+    .section-heading h2 { margin: 0; }
+    .muted { color: var(--text-secondary); }
+    .heatmap-wrap { overflow-x: auto; }
+    .heatmap {
+        display: grid;
+        grid-template-columns: 84px repeat(24, minmax(34px, 1fr));
+        min-width: 920px;
+        gap: 2px;
+        align-items: stretch;
+    }
+    .heatmap-label, .heatmap-hour, .heat-cell {
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: .76rem;
+    }
+    .heatmap-label { justify-content: flex-start; font-weight: 700; padding-left: 8px; }
+    .heatmap-hour { color: var(--text-secondary); font-weight: 600; }
+    .heat-cell {
+        border-radius: 3px;
+        color: white;
+        background: linear-gradient(90deg, #177e89 var(--heat), var(--surface) var(--heat));
+        border: 1px solid var(--border);
+        cursor: default;
+    }
+    .heat-legend { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text-secondary); font-size: .82rem; }
+    .heat-gradient { width: 170px; height: 12px; border-radius: 3px; background: linear-gradient(90deg, var(--surface), #177e89); border: 1px solid var(--border); }
+    .timeline-shell { overflow-x: auto; }
+    .timeline { min-width: 980px; }
+    .timeline-axis, .timeline-row { display: grid; grid-template-columns: 190px 1fr; }
+    .timeline-axis { border-bottom: 1px solid var(--border); }
+    .timeline-hours { display: grid; grid-template-columns: repeat(24, 1fr); }
+    .timeline-hours span { font-size: .72rem; color: var(--text-secondary); text-align: left; border-left: 1px solid var(--border-light); padding: 6px 2px; }
+    .timeline-label { padding: 6px 10px; font-weight: 700; border-right: 1px solid var(--border); }
+    .timeline-row { min-height: 58px; border-bottom: 1px solid var(--border-light); }
+    .timeline-track { position: relative; background: repeating-linear-gradient(to right, transparent 0, transparent calc(4.1667% - 1px), var(--border-light) calc(4.1667% - 1px), var(--border-light) 4.1667%); }
+    .counter-bar { position: absolute; top: 10px; height: 38px; min-width: 34px; padding: 4px 8px; border-radius: 5px; background: #d05a3b; color: white; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; box-shadow: 0 2px 5px rgb(0 0 0 / 18%); }
+    .counter-bar strong { display: block; font-size: .78rem; }
+    .counter-bar small { font-size: .68rem; opacity: .9; }
+    .timeline-empty { padding: 28px; text-align: center; color: var(--text-secondary); border: 1px dashed var(--border); }
+    .report-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    @media (max-width: 700px) { .timeline-axis, .timeline-row { grid-template-columns: 130px 1fr; } .timeline-label { font-size: .82rem; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="counter-report-header">
+    <h1>Check-in Counter Usage</h1>
+    <p>See the average seasonal pattern, then inspect exactly what happened on one day.</p>
+</div>
+
+<form method="get" class="report-controls">
+    <div class="form-group">
+        <label class="form-label" for="season">Season</label>
+        <select class="form-control" id="season" name="season">
+            <option value="summer" {% if season == 'summer' %}selected{% endif %}>Summer</option>
+            <option value="winter" {% if season == 'winter' %}selected{% endif %}>Winter</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="year">Season year</label>
+        <input class="form-control" id="year" name="year" type="number" min="2020" max="2099" value="{{ year }}">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="date">Daily view date</label>
+        <input class="form-control" id="date" name="date" type="date" min="{{ season_start|date:'Y-m-d' }}" max="{{ season_end|date:'Y-m-d' }}" value="{{ selected_date|date:'Y-m-d' }}">
+    </div>
+    <button class="btn btn-primary" type="submit">Update Report</button>
+</form>
+
+<div class="report-section">
+    <div class="section-heading">
+        <div>
+            <h2>Average counter heat map</h2>
+            <p class="muted">Percentage of season dates on which each counter was occupied during each hour.</p>
+        </div>
+        <strong>{{ total_days }} season days</strong>
+    </div>
+    <div class="heatmap-wrap">
+        <div class="heatmap">
+            <div class="heatmap-label">Counter</div>
+            {% for hour in "012345678901234567890123"|make_list %}<div class="heatmap-hour">{{ forloop.counter0|stringformat:'02d' }}</div>{% endfor %}
+            {% for row in heatmap_rows %}
+            <div class="heatmap-label">C{{ row.counter }}</div>
+            {% for cell in row.cells %}
+            <div class="heat-cell" style="--heat: {{ cell.percent }}%;" title="Counter {{ row.counter }}, {{ cell.hour|stringformat:'02d' }}:00: {{ cell.percent }}% of season dates">{% if cell.percent >= 50 %}{{ cell.percent|floatformat:0 }}{% endif %}</div>
+            {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+    <div class="heat-legend"><span>Low</span><div class="heat-gradient"></div><span>High</span><span>Values are occupied-date percentages.</span></div>
+</div>
+
+<div class="report-section">
+    <div class="section-heading">
+        <div>
+            <h2>Daily counter timeline</h2>
+            <p class="muted">{{ selected_date|date:'l, d M Y' }}. Each bar shows the allocated counter block and exact window.</p>
+        </div>
+        <strong>{{ selected_day_records }} allocation{{ selected_day_records|pluralize }}</strong>
+    </div>
+    {% if daily_rows %}
+    <div class="timeline-shell">
+        <div class="timeline">
+            <div class="timeline-axis">
+                <div class="timeline-label">Flight</div>
+                <div class="timeline-hours">{% for hour in "012345678901234567890123"|make_list %}<span>{{ forloop.counter0|stringformat:'02d' }}:00</span>{% endfor %}</div>
+            </div>
+            {% for row in daily_rows %}
+            <div class="timeline-row">
+                <div class="timeline-label">{{ row.flight }}<br><small class="muted">{{ row.counter_range }}</small></div>
+                <div class="timeline-track">
+                    <div class="counter-bar" style="left: {{ row.left_percent }}%; width: {{ row.width_percent }}%;" title="{{ row.flight }}: {{ row.start }} - {{ row.end }} on {{ row.counter_range }}">
+                        <strong>{{ row.counter_range }}</strong><small>{{ row.start }} - {{ row.end }}</small>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="timeline-empty">No check-in counter allocations were recorded for this date.</div>
+    {% endif %}
+    <div class="report-links">
+        <a class="btn btn-secondary btn-sm" href="{% url 'daily_analysis' %}?season={{ season }}&year={{ year }}&day={{ selected_date|date:'l'|lower }}">Open full daily analysis</a>
+        <a class="btn btn-secondary btn-sm" href="{% url 'season_schedule' %}?season={{ season }}&year={{ year }}">View season schedule</a>
+    </div>
+</div>
+{% endblock %}

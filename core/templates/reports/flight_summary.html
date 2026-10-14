@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Flight Summary - Scheduler v2{% endblock %}
+
+{% block extra_head %}
+<style>
+    .rpt-header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: var(--spacing-6); border-radius: var(--radius); margin-bottom: var(--spacing-4); }
+    .rpt-header h1 { color: #fff; margin: 0 0 4px; }
+    .rpt-header p { margin: 0; opacity: .85; }
+    .rpt-controls { display: flex; gap: var(--spacing-3); align-items: end; flex-wrap: wrap; background: var(--surface-light); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--spacing-4); margin-bottom: var(--spacing-4); }
+    .rpt-controls .form-group { margin: 0; }
+    .rpt-controls .spacer { flex: 1; }
+    .sum-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: var(--spacing-4); overflow: hidden; }
+    .sum-block header { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 14px; background: var(--primary-light); border-bottom: 1px solid var(--border); }
+    .sum-block header h2 { margin: 0; font-size: 1.05rem; }
+    .sum-block header span { font-size: .82rem; color: var(--text-secondary); }
+    .sum-block table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+    .sum-block th { text-align: left; padding: 7px 10px; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .sum-block td { padding: 6px 10px; border-bottom: 1px solid var(--border-light); }
+    .time-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .muted { color: var(--text-secondary); }
+    .nextday { font-size: .7rem; color: var(--warning); font-weight: 700; margin-left: 2px; }
+    .empty-day { padding: 14px; color: var(--text-secondary); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rpt-header">
+    <h1>Flight Summary</h1>
+    <p>Every slotted flight ordered by time (EAT), split into passenger and cargo. Flights operating every day show as Daily.</p>
+</div>
+
+<form method="get" class="rpt-controls">
+    <div class="form-group">
+        <label class="form-label" for="season">Season</label>
+        <select class="form-control" id="season" name="season">
+            <option value="winter" {% if season == 'winter' %}selected{% endif %}>Winter</option>
+            <option value="summer" {% if season == 'summer' %}selected{% endif %}>Summer</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="year">Year</label>
+        <input class="form-control" id="year" name="year" type="number" min="2020" max="2099" value="{{ year }}" style="width: 90px;">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="start">Period from</label>
+        <input class="form-control" id="start" name="start" type="date" value="{{ start|date:'Y-m-d' }}">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="end">Period to</label>
+        <input class="form-control" id="end" name="end" type="date" value="{{ end|date:'Y-m-d' }}">
+    </div>
+    <button class="btn btn-primary" type="submit">Update</button>
+    <div class="spacer"></div>
+    <a class="btn btn-secondary" id="export-summary-xlsx" href="{% url 'flight_summary_export' %}?season={{ season }}&year={{ year }}&start={{ start|date:'Y-m-d' }}&end={{ end|date:'Y-m-d' }}">Export Excel</a>
+</form>
+
+{% for title, rows in tables %}
+<section class="sum-block">
+    <header>
+        <h2>{{ title }}</h2>
+        <span>{{ rows|length }} flights</span>
+    </header>
+    {% if rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Airline</th><th>Type</th><th>Inbound</th><th>Arr (EAT)</th><th>From</th><th>Days</th>
+                <th>Dept (EAT)</th><th>Outbound</th><th>To</th><th>Period</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr>
+                <td>{{ r.airline }}</td>
+                <td>{{ r.type }}</td>
+                <td><strong>{{ r.arr_flight }}</strong></td>
+                <td class="time-cell">{{ r.arr_time|time:"H:i" }}</td>
+                <td>{{ r.origin }}</td>
+                <td>{{ r.days }}</td>
+                <td class="time-cell">{{ r.dep_time|time:"H:i" }}{% if r.next_day %}<span class="nextday" title="Departs the following day">+1</span>{% endif %}</td>
+                <td><strong>{{ r.dep_flight }}</strong></td>
+                <td>{{ r.destination }}</td>
+                <td class="muted">{{ r.period }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-day">No flights in this period.</div>
+    {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

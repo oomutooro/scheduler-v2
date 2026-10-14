@@ -45,6 +45,166 @@ class SeasonUtilsTest(TestCase):
         self.assertTrue(season_utils.is_date_in_season(date(2026, 11, 15), 'winter', 2026))
 
 
+class ExplicitScheduleDateTest(TestCase):
+    def test_bounded_flight_is_visible_outside_calendar_season(self):
+        from datetime import time
+        from core.models import Airline, Airport, AircraftType, FlightRequest
+        from core.services.schedule import get_flights_for_date
+
+        airline = Airline.objects.create(iata_code='UR', icao_code='UGD', name='Uganda Airlines')
+        aircraft = AircraftType.objects.create(
+            code='B738', name='Boeing 737-800', category='narrow_body',
+            size_code='C', is_wide_body=False,
+        )
+        ebb = Airport.objects.create(iata_code='EBB', city_name='Entebbe')
+        nbo = Airport.objects.create(iata_code='NBO', city_name='Nairobi')
+        flight = FlightRequest.objects.create(
+            airline=airline,
+            aircraft_type=aircraft,
+            operation_type='departure',
+            season='winter',
+            year=2026,
+            departure_flight_number='UR999',
+            departure_time=time(12, 0),
+            origin=ebb,
+            destination=nbo,
+            valid_from=date(2026, 10, 25),
+            valid_to=date(2027, 3, 29),
+            days_of_operation=127,
+        )
+
+        for schedule_date in (date(2026, 10, 25), date(2027, 3, 29)):
+            with self.subTest(schedule_date=schedule_date):
+                self.assertIn(flight, get_flights_for_date(schedule_date))
+
+
+class FlightListOrderingTest(TestCase):
+    def test_rows_sort_by_relevant_movement_time(self):
+        from datetime import time
+        from types import SimpleNamespace
+        from core.views import _flight_list_sort_key
+
+        flights = [
+            SimpleNamespace(pk=1, operation_type='departure', arrival_time=None, departure_time=time(5, 0)),
+            SimpleNamespace(pk=2, operation_type='arrival', arrival_time=time(4, 0), departure_time=None),
+            SimpleNamespace(pk=3, operation_type='turnaround', arrival_time=time(3, 0), departure_time=time(6, 0)),
+            SimpleNamespace(pk=4, operation_type='departure', arrival_time=None, departure_time=None),
+        ]
+
+        self.assertEqual(
+            [flight.pk for flight in sorted(flights, key=_flight_list_sort_key)],
+            [3, 2, 1, 4],
+        )
+
+    def test_direction_filter_is_applied_and_preserved(self):
+        from datetime import time
+        from unittest.mock import patch
+        from django.test import RequestFactory
+        from core.models import Airline, AircraftType, FlightRequest
+        from core.views import flights_list
+
+        airline = Airline.objects.create(iata_code='XX', icao_code='XXX', name='Test Airline')
+        aircraft = AircraftType.objects.create(
+            code='T1', name='Test Aircraft', category='narrow_body',
+            size_code='C', is_wide_body=False,
+        )
+        arrival = FlightRequest.objects.create(
+            airline=airline, aircraft_type=aircraft, operation_type='arrival',
+            season='winter', year=2026, arrival_flight_number='XX100',
+            arrival_time=time(4, 0),
+        )
+        departure = FlightRequest.objects.create(
+            airline=airline, aircraft_type=aircraft, operation_type='departure',
+            season='winter', year=2026, departure_flight_number='XX101',
+            departure_time=time(5, 0),
+        )
+
+        request = RequestFactory().get('/flights/', {'season': 'winter', 'operation': 'departure'})
+        with patch('core.views.render', side_effect=lambda request, template, context: context):
+            context = flights_list(request)
+
+        self.assertEqual([row['flight'] for row in context['flight_rows']], [departure])
+        self.assertIn('operation=departure', context['query_suffix'])
+        self.assertNotIn(arrival, [row['flight'] for row in context['flight_rows']])
+
+
+class SeasonAnalyticsTest(TestCase):
+    def setUp(self):
+        from datetime import time
+        from core.models import Airline, AircraftType, Airport, FlightRequest
+
+        airline = Airline.objects.create(iata_code='SN', icao_code='BEL', name='Brussels Airlines')
+        aircraft = AircraftType.objects.create(
+            code='A333', name='Airbus A330-300', category='wide_body', size_code='E', is_wide_body=True,
+        )
+        ebb = Airport.objects.create(iata_code='EBB', city_name='Entebbe')
+        bru = Airport.objects.create(iata_code='BRU', city_name='Brussels')
+        # Arrives Wed 23:15, departs 00:20 on Thursday (linked via ground_days=1).
+        self.turnaround = FlightRequest.objects.create(
+            airline=airline, aircraft_type=aircraft, operation_type='turnaround', season='winter', year=2026,
+            arrival_flight_number='SN1', departure_flight_number='SN2', arrival_time=time(23, 15),
+            departure_time=time(0, 20), origin=bru, destination=bru, ground_days=1,
+            valid_from=date(2026, 10, 25), valid_to=date(2027, 3, 27), days_of_operation=8,
+        )
+
+    def test_window_matches_iata_season(self):
+        from core.services.season_analytics import season_window
+
+        self.assertEqual(season_window('winter', 2026), (date(2026, 10, 25), date(2027, 3, 27)))
+
+    def test_next_day_departure_is_placed_on_the_following_day(self):
+        from core.services.season_analytics import build_movements
+
+        movements = build_movements('winter', 2026, date(2026, 10, 25), date(2026, 11, 7))
+        wednesday, thursday = date(2026, 10, 28), date(2026, 10, 29)
+        arrivals = [m for m in movements if m['kind'] == 'ARR']
+        departures = [m for m in movements if m['kind'] == 'DEP']
+
+        self.assertIn(wednesday, [m['date'] for m in arrivals])
+        self.assertIn(thursday, [m['date'] for m in departures])
+        self.assertNotIn(wednesday, [m['date'] for m in departures])
+
+    def test_weekly_schedule_combines_turnarounds_and_orders_by_time(self):
+        from datetime import time
+        from core.models import FlightRequest
+        from core.services.season_analytics import weekly_schedule
+
+        FlightRequest.objects.create(
+            airline=self.turnaround.airline, aircraft_type=self.turnaround.aircraft_type, operation_type='arrival',
+            season='winter', year=2026, arrival_flight_number='SN3', arrival_time=time(5, 0),
+            origin=self.turnaround.origin, destination=self.turnaround.destination,
+            valid_from=date(2026, 10, 25), valid_to=date(2027, 3, 27), days_of_operation=127,
+        )
+        days = weekly_schedule('winter', 2026, date(2026, 10, 25), date(2027, 3, 27))
+        wednesday = next(d for d in days if d['weekday'] == 'Wednesday')
+        tuesday = next(d for d in days if d['weekday'] == 'Tuesday')
+
+        self.assertEqual([d['weekday'] for d in days], ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+        self.assertEqual([r['arr_flight'] for r in wednesday['rows']], ['SN3', 'SN1'])
+        one_way, turnaround = wednesday['rows']
+        self.assertEqual((one_way['dep_flight'], one_way['dep_time']), ('', None))
+        self.assertEqual((turnaround['dep_flight'], turnaround['dep_time'], turnaround['next_day']), ('SN2', time(0, 20), True))
+        self.assertEqual([r['arr_flight'] for r in tuesday['rows']], ['SN3'])
+
+        arrivals_only = weekly_schedule('winter', 2026, date(2026, 10, 25), date(2027, 3, 27), 'ARR')
+        self.assertTrue(all(r['dep_time'] is None for d in arrivals_only for r in d['rows']))
+
+    def test_analytics_counts_and_exports(self):
+        import io
+        from openpyxl import load_workbook
+        from core.services import report_exports
+        from core.services.season_analytics import season_analytics
+
+        start, end = date(2026, 10, 25), date(2026, 11, 7)
+        data = season_analytics('winter', 2026, start, end)
+
+        self.assertEqual(data['arrivals'], 2)
+        self.assertEqual(data['departures'], 2)
+        self.assertEqual(data['aircraft_rows'][0]['code'], 'A333')
+        self.assertIn('Heatmap', load_workbook(io.BytesIO(report_exports.analytics_workbook(data))).sheetnames)
+        self.assertTrue(report_exports.analytics_pdf(data).startswith(b'%PDF'))
+
+
 class DailyAnalysisTest(TestCase):
     def setUp(self):
         from datetime import time

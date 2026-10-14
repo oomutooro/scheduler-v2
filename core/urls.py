@@ -1,5 +1,5 @@
 from django.urls import path
-from core import views
+from core import views, views_reports
 
 urlpatterns = [
     # Temporary seeder - remove after use
@@ -44,6 +44,13 @@ urlpatterns = [
     path('reports/season-schedule/', views.season_schedule_view, name='season_schedule'),
     path('reports/season-schedule/export/', views.season_schedule_export_excel, name='season_schedule_excel'),
     path('reports/daily-analysis/', views.daily_analysis, name='daily_analysis'),
+    path('reports/counter-usage/', views.counter_usage_report, name='counter_usage_report'),
+    path('reports/daily-flights/', views_reports.daily_flights_report, name='daily_flights_report'),
+    path('reports/daily-flights/export/<str:fmt>/', views_reports.daily_flights_export, name='daily_flights_export'),
+    path('reports/flight-summary/', views_reports.flight_summary_report, name='flight_summary_report'),
+    path('reports/flight-summary/export/', views_reports.flight_summary_export, name='flight_summary_export'),
+    path('reports/season-analytics/', views_reports.season_analytics_report, name='season_analytics'),
+    path('reports/season-analytics/export/<str:fmt>/', views_reports.season_analytics_export, name='season_analytics_export'),
     path('reports/export/excel/', views.reports_export_excel, name='reports_export_excel'),
     path('reports/export/pdf/', views.reports_export_pdf, name='reports_export_pdf'),
 

@@ -77,21 +77,81 @@ def get_allocated_counters_on_date(date_: date, alloc_cache: Optional[dict[str, 
 def find_previous_allocation_for_flight(
     flight: FlightRequest,
     date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
 ) -> tuple[Optional[StandAllocation], Optional[GateAllocation]]:
     """
     Check if this flight already has allocations on other dates.
     If so, return the stand and gate to reuse them.
     """
-    # Find any previous date where this flight was allocated
-    prev_stand = StandAllocation.objects.filter(
-        flight_request=flight
-    ).exclude(date=date_).first()
-    
-    prev_gate = GateAllocation.objects.filter(
-        flight_request=flight
-    ).exclude(date=date_).first()
+    cache_key = f"previous_allocations_{flight.pk}"
+    if alloc_cache is not None and cache_key in alloc_cache:
+        stand_allocations, gate_allocations = alloc_cache[cache_key]
+    else:
+        stand_allocations = list(
+            StandAllocation.objects.filter(flight_request=flight).select_related('stand')
+        )
+        gate_allocations = list(
+            GateAllocation.objects.filter(flight_request=flight).select_related('gate')
+        )
+        if alloc_cache is not None:
+            alloc_cache[cache_key] = (stand_allocations, gate_allocations)
+
+    prev_stand = next((allocation for allocation in stand_allocations if allocation.date != date_), None)
+    prev_gate = next((allocation for allocation in gate_allocations if allocation.date != date_), None)
     
     return prev_stand, prev_gate
+
+
+def get_stand_allocation_for_flight_date(
+    flight: FlightRequest,
+    date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
+) -> Optional[StandAllocation]:
+    """Return a flight's stand allocation, caching the lookup during a run."""
+    cache_key = f"stand_object_{flight.pk}_{date_}"
+    if alloc_cache is not None and cache_key in alloc_cache:
+        return alloc_cache[cache_key]
+
+    allocation = StandAllocation.objects.filter(
+        flight_request=flight,
+        date=date_,
+    ).select_related('stand').first()
+    if alloc_cache is not None:
+        alloc_cache[cache_key] = allocation
+    return allocation
+
+
+def get_related_stand_ids(
+    stand_id: int,
+    alloc_cache: Optional[dict[str, Any]] = None,
+) -> list[int]:
+    """Return parent/child stand IDs using one cached stand map per run."""
+    if alloc_cache is None:
+        stands = list(ParkingStand.objects.all())
+        stand_map = {int(stand.pk): stand for stand in stands}
+        children_map: dict[Optional[int], list[int]] = {}
+    else:
+        if 'stand_relationships' not in alloc_cache:
+            stands = list(ParkingStand.objects.all())
+            alloc_cache['stand_relationships'] = {
+                int(stand.pk): (
+                    int(stand.parent_stand_id) if stand.parent_stand_id else None
+                )
+                for stand in stands
+            }
+        stand_map = alloc_cache['stand_relationships']
+        children_map = {}
+        for child_id, parent_id in stand_map.items():
+            if parent_id is not None:
+                children_map.setdefault(parent_id, []).append(child_id)
+
+    parent_id = stand_map.get(stand_id)
+    related_ids = {stand_id}
+    if parent_id:
+        related_ids.add(parent_id)
+        related_ids.update(children_map.get(parent_id, []))
+    related_ids.update(children_map.get(stand_id, []))
+    return list(related_ids)
 
 
 def get_airline_counter_usage_on_date(
@@ -119,7 +179,11 @@ def get_airline_counter_usage_on_date(
     return usage
 
 
-def get_simultaneous_airline_flights(flight: FlightRequest, date_: date) -> list[FlightRequest]:
+def get_simultaneous_airline_flights(
+    flight: FlightRequest,
+    date_: date,
+    alloc_cache: Optional[dict[str, Any]] = None,
+) -> list[FlightRequest]:
     """
     Find other flights from the same airline that check in at the same time on this date.
     """
@@ -133,13 +197,18 @@ def get_simultaneous_airline_flights(flight: FlightRequest, date_: date) -> list
     checkin_close = time_subtract_minutes(departure, 60)
     checkin_open = time_subtract_minutes(checkin_close, flight.checkin_duration_hours * 60)
     
-    # Find other flights from same airline that overlap
-    other_flights = FlightRequest.objects.filter(
-        airline=flight.airline,
-        season=flight.season,
-        year=flight.year,
-        operation_type__in=['turnaround', 'departure']
-    ).exclude(id=int(flight.pk))
+    cache_key = f"same_airline_flights_{flight.airline_id}_{flight.season}_{flight.year}"
+    if alloc_cache is not None and cache_key in alloc_cache:
+        other_flights = alloc_cache[cache_key]
+    else:
+        other_flights = list(FlightRequest.objects.filter(
+            airline=flight.airline,
+            season=flight.season,
+            year=flight.year,
+            operation_type__in=['turnaround', 'departure']
+        ).exclude(id=int(flight.pk)))
+        if alloc_cache is not None:
+            alloc_cache[cache_key] = other_flights
     
     overlapping = []
     for other in other_flights:
@@ -192,8 +261,13 @@ def allocate_stand(
     if arrival is None or departure is None:
         return None
 
+    is_ur_lgw = bool(
+        flight.airline and flight.airline.iata_code == 'UR'
+        and flight.destination and flight.destination.iata_code == 'LGW'
+    )
+
     # Check if this flight already has an allocation on another date and try to reuse it
-    prev_stand_alloc, _ = find_previous_allocation_for_flight(flight, date_)
+    prev_stand_alloc, _ = find_previous_allocation_for_flight(flight, date_, alloc_cache)
 
     # Custom rule: If the flight has a strong preference for a specific stand 
     # and the previous allocation was elsewhere, we might want to skip reuse to 
@@ -228,20 +302,7 @@ def allocate_stand(
         date_spans.append((date_, arrival, departure))
 
     def _check_conflict(stand_id: int) -> bool:
-        # Find all related stands (parent and children)
-        try:
-            stand = ParkingStand.objects.get(id=stand_id)
-            related_stand_ids = [int(stand.pk)]
-            parent_stand_id = cast(Optional[int], getattr(stand, 'parent_stand_id', None))
-            if parent_stand_id:
-                related_stand_ids.append(parent_stand_id)
-            # Add all sub-stands
-            related_stand_ids.extend(list(ParkingStand.objects.filter(parent_stand_id=int(stand.pk)).values_list('id', flat=True)))
-            # If the stand has a parent, also add its siblings
-            if parent_stand_id:
-                related_stand_ids.extend(list(ParkingStand.objects.filter(parent_stand_id=parent_stand_id).exclude(id=int(stand.pk)).values_list('id', flat=True)))
-        except ParkingStand.DoesNotExist:
-            related_stand_ids = [stand_id]
+        related_stand_ids = get_related_stand_ids(stand_id, alloc_cache)
 
         # Must be free on all required date spans
         for d, s, e in date_spans:
@@ -257,7 +318,7 @@ def allocate_stand(
         if not _check_conflict(prev_stand_id):
             # Create records for all spans
             for d, s, e in date_spans:
-                StandAllocation.objects.create(
+                alloc = StandAllocation.objects.create(
                     flight_request=flight,
                     stand=prev_stand_alloc.stand,
                     date=d,
@@ -265,7 +326,11 @@ def allocate_stand(
                     end_time=e,
                 )
                 if alloc_cache is not None:
-                        alloc_cache.setdefault(f"stand_{d}", []).append((prev_stand_id, s, e))
+                    alloc_cache.setdefault(f"stand_{d}", []).append((prev_stand_id, s, e))
+                    alloc_cache[f"stand_object_{flight.pk}_{d}"] = alloc
+                    previous = alloc_cache.get(f"previous_allocations_{flight.pk}")
+                    if previous is not None:
+                        previous[0].append(alloc)
             return prev_stand_alloc
 
     # Build preferred stand ordering (cached)
@@ -382,6 +447,9 @@ def allocate_stand(
         key=lambda s: stand_priority(s) + get_future_penalty(s)
     )
 
+    if is_ur_lgw:
+        candidates = [s for s in candidates if str(s.stand_number) == '6']
+
     for stand in candidates:
         stand_id = int(stand.pk)
         if not _check_conflict(stand_id):
@@ -397,6 +465,10 @@ def allocate_stand(
                 )
                 if alloc_cache is not None:
                     alloc_cache.setdefault(f"stand_{d}", []).append((stand_id, s, e))
+                    alloc_cache[f"stand_object_{flight.pk}_{d}"] = alloc
+                    previous = alloc_cache.get(f"previous_allocations_{flight.pk}")
+                    if previous is not None:
+                        previous[0].append(alloc)
                 if not first_alloc:
                     first_alloc = alloc
             return first_alloc
@@ -425,7 +497,7 @@ def allocate_gate(
     gate_open = time_subtract_minutes(departure, 45)
 
     # Check if this flight already has an allocation on another date and try to reuse it
-    _, prev_gate_alloc = find_previous_allocation_for_flight(flight, date_)
+    _, prev_gate_alloc = find_previous_allocation_for_flight(flight, date_, alloc_cache)
     if prev_gate_alloc:
         prev_gate_id = cast(int, getattr(prev_gate_alloc, 'gate_id'))
         # Try to reuse the same gate
@@ -447,9 +519,16 @@ def allocate_gate(
             alloc.save()
             if alloc_cache is not None:
                 alloc_cache.setdefault(f"gate_{date_}", []).append((prev_gate_id, gate_open, gate_close))
+                previous = alloc_cache.get(f"previous_allocations_{flight.pk}")
+                if previous is not None:
+                    previous[1].append(alloc)
             return alloc
 
     existing = get_allocated_gates_on_date(date_, alloc_cache)
+    is_ur_lgw = bool(
+        flight.airline and flight.airline.iata_code == 'UR'
+        and flight.destination and flight.destination.iata_code == 'LGW'
+    )
     if alloc_cache is not None and "all_gates" not in alloc_cache:
         alloc_cache["all_gates"] = list(Gate.objects.filter(is_active=True))
         if shuffle:
@@ -481,9 +560,11 @@ def allocate_gate(
         return -score
 
     candidates = sorted(all_gates, key=gate_priority)
+    if is_ur_lgw:
+        candidates = [g for g in candidates if str(g.gate_number) == '4']
 
     # determine existing stand allocation for this flight/date (if any)
-    stand_alloc = StandAllocation.objects.filter(flight_request=flight, date=date_).first()
+    stand_alloc = get_stand_allocation_for_flight_date(flight, date_, alloc_cache)
     stand_has_bridge = bool(stand_alloc and stand_alloc.stand.has_boarding_bridge)
     for gate in candidates:
         gate_id = int(gate.pk)
@@ -519,6 +600,9 @@ def allocate_gate(
             alloc.save()
             if alloc_cache is not None:
                 alloc_cache.setdefault(f"gate_{date_}", []).append((gate_id, gate_open, gate_close))
+                previous = alloc_cache.get(f"previous_allocations_{flight.pk}")
+                if previous is not None:
+                    previous[1].append(alloc)
             return alloc
 
     return None
@@ -564,13 +648,15 @@ def allocate_checkin(
     num_counters_needed = flight.min_counters
     is_home = flight.airline.is_home_airline
 
-    # Special Rule: Uganda Airlines (home airline) small/narrow-body flights
-    # exclusively share counters 1-4 regardless of overlaps or simultaneity.
-    if is_home and not (flight.aircraft_type.is_wide_body or flight.aircraft_type.size_code in ('D', 'E', 'F')):
+    # Special Rule: Uganda Airlines uses fixed shared counters.
+    # LGW departures use 1-5, all other UR departures use 1-4,
+    # regardless of aircraft size, overlaps, or simultaneity.
+    if flight.airline and flight.airline.iata_code == 'UR':
+        ur_counter_to = 5 if (flight.destination and flight.destination.iata_code == 'LGW') else 4
         alloc = CheckInAllocation(
             flight_request=flight,
             counter_from=1,
-            counter_to=4,
+            counter_to=ur_counter_to,
             date=date_,
             start_time=checkin_open,
             end_time=checkin_close,
@@ -581,14 +667,19 @@ def allocate_checkin(
         return alloc
 
     # Check if there are simultaneous flights from same airline
-    simultaneous = get_simultaneous_airline_flights(flight, date_)
+    simultaneous = get_simultaneous_airline_flights(flight, date_, alloc_cache)
     
+    existing_allocs = get_allocated_counters_on_date(date_, alloc_cache)
+
     # If there's a simultaneous flight that already has an allocation, reuse it
     for other_flight in simultaneous:
-        other_alloc = CheckInAllocation.objects.filter(
-            flight_request=other_flight,
-            date=date_
-        ).first()
+        other_alloc = next(
+            (
+                allocation for allocation in existing_allocs
+                if allocation.flight_request_id == other_flight.pk
+            ),
+            None,
+        )
         if other_alloc:
             # Create a new allocation with the same counter block
             alloc = CheckInAllocation(
@@ -604,7 +695,8 @@ def allocate_checkin(
                 alloc_cache.setdefault(f"checkin_{date_}", []).append(alloc)
             return alloc
     
-    existing_allocs = get_allocated_counters_on_date(date_, alloc_cache)
+    if alloc_cache is not None and 'handlers_map' not in alloc_cache:
+        alloc_cache['handlers_map'] = get_ground_handlers_map()
     if shuffle and alloc_cache is not None and "all_counters" in alloc_cache:
         random.shuffle(alloc_cache["all_counters"])
     # Get airline's current counter usage
@@ -737,7 +829,9 @@ def allocate_resources_for_date(
     # effectively "reserving" them even if they arrive later in the day.
     def flight_priority_key(f: FlightRequest) -> tuple[int, time]:
         p_val = 0
-        if f.airline.icao_code in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE'):
+        if f.airline and f.airline.iata_code == 'UR' and f.destination and f.destination.iata_code == 'LGW':
+            p_val = 3
+        elif f.airline.icao_code in ('QTR', 'BEL', 'ABY', 'MSR', 'UAE'):
             p_val = 2
         elif f.airline.is_home_airline:
             p_val = 1
@@ -813,6 +907,16 @@ def get_conflicts_for_date(date_: date) -> list[FlightRequest]:
 
 
 def allocate_resources_for_flight(
+    flight: FlightRequest,
+    alloc_cache: Optional[dict[str, Any]] = None,
+) -> dict[str, int]:
+    """Run the season-wide allocation for one flight in a single transaction."""
+    from django.db import transaction
+    with transaction.atomic():
+        return _allocate_resources_for_flight(flight, alloc_cache)
+
+
+def _allocate_resources_for_flight(
     flight: FlightRequest,
     alloc_cache: Optional[dict[str, Any]] = None,
 ) -> dict[str, int]:

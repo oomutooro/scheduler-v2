@@ -11,6 +11,7 @@ pycparser==2.23
 pydyf==0.11.0
 pyphen==0.17.2
 python-dateutil==2.9.0.post0
+reportlab==5.0.1
 six==1.17.0
 sqlparse==0.5.5
 tinycss2==1.4.0
