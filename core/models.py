@@ -1,6 +1,11 @@
+import os
+from datetime import date, timedelta
+
+from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.core.validators import MinValueValidator, MaxValueValidator
-from datetime import date
+
+from core.utils import DAY_ORDER, is_valid_operation
 
 
 # ─── Reference Data ───────────────────────────────────────────────────────────
@@ -171,8 +176,7 @@ class FlightRequest(models.Model):
     @property
     def departure_date_offset(self):
         """Return timedelta for the departure date offset resulting from ground days."""
-        import datetime
-        return datetime.timedelta(days=self.ground_days)
+        return timedelta(days=self.ground_days)
 
     def __str__(self):
         nums = []
@@ -184,12 +188,7 @@ class FlightRequest(models.Model):
 
     def get_days_list(self):
         """Return list of day names that are set in the bitmask."""
-        days = []
-        day_order = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-        for day in day_order:
-            if self.days_of_operation & DAY_MASK[day]:
-                days.append(day.capitalize())
-        return days
+        return [day.capitalize() for day in DAY_ORDER if self.days_of_operation & DAY_MASK[day]]
 
     def operates_on_date(self, date: date) -> bool:
         """Return True if this flight request operates on the given date."""
@@ -198,10 +197,9 @@ class FlightRequest(models.Model):
             return False
         if self.valid_to and date > self.valid_to:
             return False
-        # Check day of week (weekday(): Mon=0..Sun=6 → we use Sun=0..Sat=6)
-        dow = date.isoweekday() % 7  # Sun=0, Mon=1, ... Sat=6
-        day_names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-        return bool(self.days_of_operation & DAY_MASK[day_names[dow]])
+        # Check day of week (isoweekday(): Mon=1..Sun=7 -> Sun=0..Sat=6 for our mask)
+        dow = date.isoweekday() % 7
+        return bool(self.days_of_operation & DAY_MASK[DAY_ORDER[dow]])
 
     @property
     def display_flight_numbers(self):
@@ -216,7 +214,6 @@ class FlightRequest(models.Model):
         else:
             if not arr or not dep:
                 return f"{arr or '-'} / {dep or '-'}"
-            import os
             common = os.path.commonprefix([arr, dep])
             if common:
                 return f"{arr}/{dep[len(common):]}"
@@ -258,6 +255,28 @@ class FlightRequest(models.Model):
         from core.services.season import get_season_dates
         _, end = get_season_dates(self.season, self.year)
         return end
+
+    def clean(self):
+        """
+        Validate model invariants:
+          - home airlines never file turnarounds; foreign airlines always do;
+          - turnaround requests need both arrival and departure times;
+          - single-operation requests need their own time.
+        """
+        errors = {}
+        ok, msg = is_valid_operation(self.airline, self.operation_type)
+        if not ok:
+            errors['operation_type'] = msg
+
+        if self.operation_type == 'turnaround' and (not self.arrival_time or not self.departure_time):
+            errors['departure_time'] = 'Turnaround flights need both an arrival and a departure time.'
+        elif self.operation_type == 'arrival' and not self.arrival_time:
+            errors['arrival_time'] = 'Arrival requests need an arrival time.'
+        elif self.operation_type == 'departure' and not self.departure_time:
+            errors['departure_time'] = 'Departure requests need a departure time.'
+
+        if errors:
+            raise ValidationError(errors)
 
 
 # ─── Airport Resources (Static reference — stands, gates, counters) ───────────

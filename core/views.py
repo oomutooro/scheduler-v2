@@ -21,6 +21,7 @@ from core.services.season import (
     get_current_season, get_summer_dates, get_winter_dates
 )
 from core.services.allocation import allocate_resources_for_date, allocate_resources_for_flight, time_add_minutes, time_subtract_minutes
+from core.utils import DAY_ORDER, DAY_ORDER_TITLE, is_valid_operation, utc_to_eat
 
 
 def get_ur_counter_block(flight: FlightRequest) -> tuple[int, int] | None:
@@ -133,8 +134,22 @@ def dashboard(request: HttpRequest):
 
     # Operational actions / summaries
     pending_count = FlightRequest.objects.filter(status='pending').count()
+    allocated_count = FlightRequest.objects.filter(status='allocated').count()
+    conflict_count = FlightRequest.objects.filter(status='conflict').count()
     airlines_with_requests = FlightRequest.objects.values_list('airline_id', flat=True).distinct()
     missing_airlines_count = Airline.objects.exclude(id__in=airlines_with_requests).count()
+
+    # Chart data: flights per airline (top 12) and status split.
+    airline_rows = (
+        FlightRequest.objects.values('airline__name')
+        .annotate(n=Count('id'))
+        .order_by('-n')[:12]
+    )
+    airline_labels = [r['airline__name'] for r in airline_rows]
+    airline_values = [r['n'] for r in airline_rows]
+
+    status_rows = FlightRequest.objects.values('status').annotate(n=Count('id'))
+    status_split = {r['status']: r['n'] for r in status_rows}
 
     context = {
         'current_season': season_name,
@@ -151,7 +166,21 @@ def dashboard(request: HttpRequest):
         'winter_start_2025': winter_start_2025,
         'winter_end_2025_26': winter_end_2025_26,
         'pending_count': pending_count,
+        'allocated_count': allocated_count,
+        'conflict_count': conflict_count,
         'missing_airlines_count': missing_airlines_count,
+        'airline_labels': airline_labels,
+        'airline_values': airline_values,
+        'status_pending': status_split.get('pending', 0),
+        'status_allocated': status_split.get('allocated', 0),
+        'status_conflict': status_split.get('conflict', 0),
+        'status_cancelled': status_split.get('cancelled', 0),
+        'status_chart': {
+            'Pending': status_split.get('pending', 0),
+            'Allocated': status_split.get('allocated', 0),
+            'Conflict': status_split.get('conflict', 0),
+            'Cancelled': status_split.get('cancelled', 0),
+        },
         'active_page': 'dashboard',
     }
     return render(request, 'dashboard.html', context)
@@ -298,55 +327,63 @@ def flight_new(request: HttpRequest):
     return render(request, 'flights/form.html', context)
 
 
+def _parse_flight_form(request: HttpRequest) -> dict[str, Any]:
+    """
+    Parse and validate the flight-request form into model field values.
+    Raises ValueError on any invalid input (including the home/foreign
+    turnaround rule).
+    """
+    airline = get_object_or_404(Airline, id=request.POST.get('airline_id'))
+    aircraft_type = get_object_or_404(AircraftType, id=request.POST.get('aircraft_type_id'))
+
+    origin_id = request.POST.get('origin_id')
+    destination_id = request.POST.get('destination_id')
+    origin = Airport.objects.filter(id=origin_id).first() if origin_id else None
+    destination = Airport.objects.filter(id=destination_id).first() if destination_id else None
+
+    days_mask = 0
+    for day in DAY_ORDER:
+        if request.POST.get(f'day_{day}'):
+            days_mask |= DAY_MASK[day]
+
+    def _date(v) -> date | None:
+        return datetime.strptime(v, '%Y-%m-%d').date() if v else None
+
+    def _time(v) -> time | None:
+        return datetime.strptime(v, '%H:%M').time() if v else None
+
+    operation_type = request.POST.get('operation_type', 'turnaround')
+    ok, msg = is_valid_operation(airline, operation_type)
+    if not ok:
+        raise ValueError(msg)
+
+    return {
+        'airline': airline,
+        'aircraft_type': aircraft_type,
+        'origin': origin,
+        'destination': destination,
+        'arrival_flight_number': request.POST.get('arrival_flight_number', '').strip(),
+        'departure_flight_number': request.POST.get('departure_flight_number', '').strip(),
+        'operation_type': operation_type,
+        'season': request.POST.get('season', 'summer'),
+        'year': int(request.POST.get('year', date.today().year)),
+        'arrival_time': _time(request.POST.get('arrival_time')),
+        'departure_time': _time(request.POST.get('departure_time')),
+        'valid_from': _date(request.POST.get('valid_from')),
+        'valid_to': _date(request.POST.get('valid_to')),
+        'days_of_operation': days_mask,
+        'ground_days': int(request.POST.get('ground_days', 0)),
+        'notes': request.POST.get('notes', ''),
+    }
+
+
 def flight_create(request: HttpRequest):
     if request.method != 'POST':
         return redirect('flight_new')
 
     try:
-        airline = get_object_or_404(Airline, id=request.POST.get('airline_id'))
-        aircraft_type = get_object_or_404(AircraftType, id=request.POST.get('aircraft_type_id'))
-
-        origin_id = request.POST.get('origin_id')
-        destination_id = request.POST.get('destination_id')
-        origin = Airport.objects.filter(id=origin_id).first() if origin_id else None
-        destination = Airport.objects.filter(id=destination_id).first() if destination_id else None
-
-        # Days of operation bitmask
-        day_names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-        days_mask = 0
-        for day in day_names:
-            if request.POST.get(f'day_{day}'):
-                days_mask |= DAY_MASK[day]
-
-        # Partial season dates
-        valid_from_str = request.POST.get('valid_from')
-        valid_to_str = request.POST.get('valid_to')
-        valid_from = datetime.strptime(valid_from_str, '%Y-%m-%d').date() if valid_from_str else None
-        valid_to = datetime.strptime(valid_to_str, '%Y-%m-%d').date() if valid_to_str else None
-
-        arrival_time_str = request.POST.get('arrival_time')
-        departure_time_str = request.POST.get('departure_time')
-        arrival_time = datetime.strptime(arrival_time_str, '%H:%M').time() if arrival_time_str else None
-        departure_time = datetime.strptime(departure_time_str, '%H:%M').time() if departure_time_str else None
-
-        flight = FlightRequest.objects.create(
-            airline=airline,
-            arrival_flight_number=request.POST.get('arrival_flight_number', '').strip(),
-            departure_flight_number=request.POST.get('departure_flight_number', '').strip(),
-            aircraft_type=aircraft_type,
-            operation_type=request.POST.get('operation_type', 'turnaround'),
-            season=request.POST.get('season', 'summer'),
-            year=int(request.POST.get('year', date.today().year)),
-            arrival_time=arrival_time,
-            departure_time=departure_time,
-            origin=origin,
-            destination=destination,
-            valid_from=valid_from,
-            valid_to=valid_to,
-            days_of_operation=days_mask,
-            ground_days=int(request.POST.get('ground_days', 0)),
-            notes=request.POST.get('notes', ''),
-        )
+        data = _parse_flight_form(request)
+        flight = FlightRequest.objects.create(**data)
 
         messages.success(
             request,
@@ -394,46 +431,23 @@ def flight_update(request: HttpRequest, pk: int):
     flight = get_object_or_404(FlightRequest, pk=pk)
 
     try:
-        airline = get_object_or_404(Airline, id=request.POST.get('airline_id'))
-        aircraft_type = get_object_or_404(AircraftType, id=request.POST.get('aircraft_type_id'))
-
-        origin_id = request.POST.get('origin_id')
-        destination_id = request.POST.get('destination_id')
-        origin = Airport.objects.filter(id=origin_id).first() if origin_id else None
-        destination = Airport.objects.filter(id=destination_id).first() if destination_id else None
-
-        day_names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-        days_mask = 0
-        for day in day_names:
-            if request.POST.get(f'day_{day}'):
-                days_mask |= DAY_MASK[day]
-
-        valid_from_str = request.POST.get('valid_from')
-        valid_to_str = request.POST.get('valid_to')
-        valid_from = datetime.strptime(valid_from_str, '%Y-%m-%d').date() if valid_from_str else None
-        valid_to = datetime.strptime(valid_to_str, '%Y-%m-%d').date() if valid_to_str else None
-
-        arrival_time_str = request.POST.get('arrival_time')
-        departure_time_str = request.POST.get('departure_time')
-        arrival_time = datetime.strptime(arrival_time_str, '%H:%M').time() if arrival_time_str else None
-        departure_time = datetime.strptime(departure_time_str, '%H:%M').time() if departure_time_str else None
-
-        flight.airline = airline
-        flight.arrival_flight_number = request.POST.get('arrival_flight_number', '').strip()
-        flight.departure_flight_number = request.POST.get('departure_flight_number', '').strip()
-        flight.aircraft_type = aircraft_type
-        flight.operation_type = request.POST.get('operation_type', 'turnaround')
-        flight.season = request.POST.get('season', 'summer')
-        flight.year = int(request.POST.get('year', date.today().year))
-        flight.arrival_time = arrival_time
-        flight.departure_time = departure_time
-        flight.origin = origin
-        flight.destination = destination
-        flight.valid_from = valid_from
-        flight.valid_to = valid_to
-        flight.days_of_operation = days_mask
-        flight.ground_days = int(request.POST.get('ground_days', 0))
-        flight.notes = request.POST.get('notes', '')
+        data = _parse_flight_form(request)
+        flight.airline = data['airline']
+        flight.arrival_flight_number = data['arrival_flight_number']
+        flight.departure_flight_number = data['departure_flight_number']
+        flight.aircraft_type = data['aircraft_type']
+        flight.operation_type = data['operation_type']
+        flight.season = data['season']
+        flight.year = data['year']
+        flight.arrival_time = data['arrival_time']
+        flight.departure_time = data['departure_time']
+        flight.origin = data['origin']
+        flight.destination = data['destination']
+        flight.valid_from = data['valid_from']
+        flight.valid_to = data['valid_to']
+        flight.days_of_operation = data['days_of_operation']
+        flight.ground_days = data['ground_days']
+        flight.notes = data['notes']
         flight.status = 'pending'  # reset status when edited
         flight.save()
 

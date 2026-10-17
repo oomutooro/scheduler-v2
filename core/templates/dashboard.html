@@ -1,6 +1,54 @@
 {% extends 'base.html' %}
 {% block title %}Dashboard — Entebbe Airport Slotting System{% endblock %}
 
+{% block extra_head %}
+{% load static %}
+<script src="{% static 'js/chart.min.js' %}"></script>
+<script>
+window.addEventListener('DOMContentLoaded', function () {
+    var labels = JSON.parse(document.getElementById('data-airline-labels').textContent);
+    var values = JSON.parse(document.getElementById('data-airline-values').textContent);
+    if (window.Chart && labels.length) {
+        new Chart(document.getElementById('airlineChart'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Flights',
+                    data: values,
+                    backgroundColor: 'rgba(14, 124, 134, 0.72)',
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+            }
+        });
+    }
+
+    var status = JSON.parse(document.getElementById('data-status').textContent);
+    if (window.Chart) {
+        new Chart(document.getElementById('statusChart'), {
+            type: 'doughnut',
+            data: {
+                labels: Object.keys(status),
+                datasets: [{
+                    data: Object.values(status),
+                    backgroundColor: ['#6b8fd4', '#1e7d47', '#c07a00', '#94a3b8']
+                }]
+            },
+            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+        });
+    }
+});
+</script>
+{{ airline_labels|json_script:"data-airline-labels" }}
+{{ airline_values|json_script:"data-airline-values" }}
+{{ status_chart|json_script:"data-status" }}
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">Entebbe International Airport</h1>
@@ -49,6 +97,34 @@
             <div class="stat-sub">Airlines with 0 schedule filings</div>
         </div>
     </a>
+    <div class="stat-card">
+        <div class="stat-card-icon stat-icon-blue" style="background: rgba(30, 125, 71, 0.1); color: #1e7d47;">✓</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ allocated_count }}</div>
+            <div class="stat-label">Allocated</div>
+            <div class="stat-sub">Flights with resources assigned</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-icon stat-icon-orange" style="background: rgba(192, 122, 0, 0.12); color: #c07a00;">⚡</div>
+        <div class="stat-card-body">
+            <div class="stat-value">{{ conflict_count }}</div>
+            <div class="stat-label">Conflicts</div>
+            <div class="stat-sub">Flights needing attention</div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts -->
+<div class="charts-grid">
+    <div class="section-card chart-card">
+        <h2 class="section-title">Flights by Airline</h2>
+        <canvas id="airlineChart" height="110"></canvas>
+    </div>
+    <div class="section-card chart-card">
+        <h2 class="section-title">Schedule Status</h2>
+        <canvas id="statusChart" height="110"></canvas>
+    </div>
 </div>
 
 <!-- Season Information -->
